@@ -5,6 +5,10 @@ import {
   useBuilderStore,
 } from "../state/builder-store.js";
 import { DEFAULT_OUTPUT_SCHEMA_JSON } from "../prompt-schema/output-schema.js";
+import {
+  DEFAULT_MODEL_POLICY,
+  getDefaultModelForProvider,
+} from "../prompt-schema/model-policy.js";
 
 export function PromptEditor(): JSX.Element {
   const selectedId = useBuilderStore((state) => state.selectedComponentId);
@@ -27,6 +31,7 @@ export function PromptEditor(): JSX.Element {
           templateVariables: [],
           availableVariables: [],
           invalidOutputSchema: null,
+          invalidModelPolicy: [],
         };
 
   useEffect(() => {
@@ -127,6 +132,74 @@ export function PromptEditor(): JSX.Element {
         <div className="warning-box">
           <div className="warning-title">Invalid Output Schema</div>
           <p className="warning-text">{diagnostics.invalidOutputSchema}</p>
+        </div>
+      )}
+      <div>
+        <div className="meta">Model policy:</div>
+        <div className="model-policy-grid">
+          <label className="meta">
+            Provider
+            <select
+              className="field-input"
+              value={selected.modelProvider ?? DEFAULT_MODEL_POLICY.provider}
+              onChange={(event) => {
+                const nextProvider = event.target.value as
+                  | "openai"
+                  | "anthropic"
+                  | "mock";
+                const currentModel = selected.modelName?.trim() ?? "";
+                update(selected.id, {
+                  modelProvider: nextProvider,
+                  modelName:
+                    currentModel.length > 0
+                      ? currentModel
+                      : getDefaultModelForProvider(nextProvider),
+                });
+              }}
+            >
+              <option value="mock">mock</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+          </label>
+          <label className="meta">
+            Model
+            <input
+              className="field-input"
+              value={selected.modelName ?? DEFAULT_MODEL_POLICY.model}
+              onChange={(event) =>
+                update(selected.id, {
+                  modelName: event.target.value,
+                })
+              }
+              placeholder="model name"
+            />
+          </label>
+          <label className="meta">
+            Temperature (0-2)
+            <input
+              className="field-input"
+              value={selected.modelTemperature ?? String(DEFAULT_MODEL_POLICY.temperature)}
+              onChange={(event) =>
+                update(selected.id, {
+                  modelTemperature: event.target.value,
+                })
+              }
+              placeholder={String(DEFAULT_MODEL_POLICY.temperature)}
+            />
+          </label>
+        </div>
+      </div>
+      {diagnostics.invalidModelPolicy.length > 0 && (
+        <div className="warning-box">
+          <div className="warning-title">Invalid Model Policy</div>
+          <div className="warning-list">
+            {diagnostics.invalidModelPolicy.map((error) => (
+              <p key={error} className="warning-text">
+                {error}
+              </p>
+            ))}
+          </div>
         </div>
       )}
     </aside>

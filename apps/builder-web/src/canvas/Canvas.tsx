@@ -129,7 +129,8 @@ export function Canvas(props: {
             promptWarningCount: promptDiagnostics
               ? promptDiagnostics.unknownVariables.length +
                 promptDiagnostics.disconnectedVariables.length +
-                (promptDiagnostics.invalidOutputSchema ? 1 : 0)
+                (promptDiagnostics.invalidOutputSchema ? 1 : 0) +
+                promptDiagnostics.invalidModelPolicy.length
               : 0,
             onSelect: (id: string) => selectComponent(id),
             onOpenPromptEditor: (id: string) => focusPromptEditor(id),

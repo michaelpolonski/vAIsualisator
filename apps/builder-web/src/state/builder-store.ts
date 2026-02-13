@@ -4,6 +4,12 @@ import {
   DEFAULT_OUTPUT_SCHEMA_JSON,
   parseOutputSchemaShape,
 } from "../prompt-schema/output-schema.js";
+import {
+  DEFAULT_MODEL_POLICY,
+  isSupportedModelProvider,
+  parseModelPolicyDraft,
+  type SupportedModelProvider,
+} from "../prompt-schema/model-policy.js";
 
 export type BuilderComponentType = "TextArea" | "Button" | "DataTable";
 export interface BuilderPosition {
@@ -21,6 +27,9 @@ export interface BuilderComponent {
   eventId?: string;
   promptTemplate?: string;
   outputSchemaJson?: string;
+  modelProvider?: SupportedModelProvider;
+  modelName?: string;
+  modelTemperature?: string;
 }
 
 export interface BuilderConnection {
@@ -255,6 +264,20 @@ function parseSnapshotComponent(value: unknown): BuilderComponent | null {
   }
 
   if (value.type === "Button") {
+    const rawModelProvider =
+      typeof value.modelProvider === "string" ? value.modelProvider : undefined;
+    const modelProvider = isSupportedModelProvider(rawModelProvider)
+      ? rawModelProvider
+      : DEFAULT_MODEL_POLICY.provider;
+    const modelName =
+      typeof value.modelName === "string" && value.modelName.trim().length > 0
+        ? value.modelName
+        : DEFAULT_MODEL_POLICY.model;
+    const modelTemperature =
+      typeof value.modelTemperature === "string"
+        ? value.modelTemperature
+        : String(DEFAULT_MODEL_POLICY.temperature);
+
     return {
       id: value.id,
       type: "Button",
@@ -270,6 +293,9 @@ function parseSnapshotComponent(value: unknown): BuilderComponent | null {
       ...(typeof value.outputSchemaJson === "string"
         ? { outputSchemaJson: value.outputSchemaJson }
         : { outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON }),
+      modelProvider,
+      modelName,
+      modelTemperature,
     };
   }
 
@@ -351,6 +377,11 @@ function normalizeBuilderComponentIdentifiers(
         typeof component.outputSchemaJson === "string"
           ? component.outputSchemaJson
           : DEFAULT_OUTPUT_SCHEMA_JSON,
+      modelProvider:
+        component.modelProvider ?? DEFAULT_MODEL_POLICY.provider,
+      modelName: component.modelName ?? DEFAULT_MODEL_POLICY.model,
+      modelTemperature:
+        component.modelTemperature ?? String(DEFAULT_MODEL_POLICY.temperature),
     };
   });
 }
@@ -460,6 +491,21 @@ function buildBuilderFromAppDefinition(app: AppDefinition): {
           promptNode && promptNode.kind === "PromptTask"
             ? JSON.stringify(promptNode.promptSpec.outputSchema.shape, null, 2)
             : DEFAULT_OUTPUT_SCHEMA_JSON,
+        modelProvider:
+          promptNode && promptNode.kind === "PromptTask"
+            ? promptNode.promptSpec.modelPolicy.provider
+            : DEFAULT_MODEL_POLICY.provider,
+        modelName:
+          promptNode && promptNode.kind === "PromptTask"
+            ? promptNode.promptSpec.modelPolicy.model
+            : DEFAULT_MODEL_POLICY.model,
+        modelTemperature:
+          promptNode && promptNode.kind === "PromptTask"
+            ? String(
+                promptNode.promptSpec.modelPolicy.temperature ??
+                  DEFAULT_MODEL_POLICY.temperature,
+              )
+            : String(DEFAULT_MODEL_POLICY.temperature),
       };
     }
 
@@ -497,6 +543,11 @@ function buildBuilderFromAppDefinition(app: AppDefinition): {
     if (promptNode && promptNode.kind === "PromptTask") {
       button.promptTemplate = promptNode.promptSpec.template;
       button.outputSchemaJson = JSON.stringify(promptNode.promptSpec.outputSchema.shape, null, 2);
+      button.modelProvider = promptNode.promptSpec.modelPolicy.provider;
+      button.modelName = promptNode.promptSpec.modelPolicy.model;
+      button.modelTemperature = String(
+        promptNode.promptSpec.modelPolicy.temperature ?? DEFAULT_MODEL_POLICY.temperature,
+      );
     }
 
     const inputStateKeys = new Set<string>();
@@ -629,6 +680,7 @@ export interface PromptDiagnostics {
   disconnectedVariables: string[];
   availableVariables: string[];
   invalidOutputSchema: string | null;
+  invalidModelPolicy: string[];
 }
 
 export function getPromptDiagnosticsForButton(args: {
@@ -653,6 +705,14 @@ export function getPromptDiagnosticsForButton(args: {
     button?.type === "Button"
       ? parseOutputSchemaShape(button.outputSchemaJson)
       : { shape: {}, error: undefined };
+  const modelPolicyResult =
+    button?.type === "Button"
+      ? parseModelPolicyDraft({
+          provider: button.modelProvider,
+          model: button.modelName,
+          temperature: button.modelTemperature,
+        })
+      : { policy: DEFAULT_MODEL_POLICY, errors: [] };
 
   for (const token of templateVariables) {
     const canonical =
@@ -673,6 +733,7 @@ export function getPromptDiagnosticsForButton(args: {
     disconnectedVariables: [...disconnected],
     availableVariables,
     invalidOutputSchema: outputSchemaResult.error ?? null,
+    invalidModelPolicy: modelPolicyResult.errors,
   };
 }
 
@@ -698,6 +759,9 @@ export const useBuilderStore = create<BuilderState>((set) => ({
       promptTemplate:
         "Take the text from {{customerComplaint}}, determine the sentiment, and suggest a polite reply.",
       outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON,
+      modelProvider: DEFAULT_MODEL_POLICY.provider,
+      modelName: DEFAULT_MODEL_POLICY.model,
+      modelTemperature: String(DEFAULT_MODEL_POLICY.temperature),
     },
     {
       id: "table_results",
@@ -760,6 +824,9 @@ export const useBuilderStore = create<BuilderState>((set) => ({
             }),
             promptTemplate: "",
             outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON,
+            modelProvider: DEFAULT_MODEL_POLICY.provider,
+            modelName: DEFAULT_MODEL_POLICY.model,
+            modelTemperature: String(DEFAULT_MODEL_POLICY.temperature),
           },
         ],
       }));
@@ -845,6 +912,13 @@ export const useBuilderStore = create<BuilderState>((set) => ({
             }),
             outputSchemaJson:
               patch.outputSchemaJson ?? item.outputSchemaJson ?? DEFAULT_OUTPUT_SCHEMA_JSON,
+            modelProvider:
+              patch.modelProvider ?? item.modelProvider ?? DEFAULT_MODEL_POLICY.provider,
+            modelName: patch.modelName ?? item.modelName ?? DEFAULT_MODEL_POLICY.model,
+            modelTemperature:
+              patch.modelTemperature ??
+              item.modelTemperature ??
+              String(DEFAULT_MODEL_POLICY.temperature),
           };
         }
 

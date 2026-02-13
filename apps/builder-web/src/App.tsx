@@ -280,6 +280,9 @@ function componentSignature(component: BuilderWorkspaceSnapshot["components"][nu
       eventId: component.eventId ?? "",
       promptTemplate: component.promptTemplate ?? "",
       outputSchemaJson: component.outputSchemaJson ?? "",
+      modelProvider: component.modelProvider ?? "",
+      modelName: component.modelName ?? "",
+      modelTemperature: component.modelTemperature ?? "",
     });
   }
 

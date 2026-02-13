@@ -201,6 +201,26 @@ body {
   color: #92400e;
 }
 
+.warning-list {
+  display: grid;
+  gap: 4px;
+}
+
+.field-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.model-policy-grid {
+  margin-top: 6px;
+  display: grid;
+  gap: 8px;
+}
+
 pre {
   background: #0f172a;
   color: #e2e8f0;

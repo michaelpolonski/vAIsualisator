@@ -4,6 +4,7 @@ import type {
   BuilderConnection,
 } from "../state/builder-store.js";
 import { parseOutputSchemaShape } from "../prompt-schema/output-schema.js";
+import { parseModelPolicyDraft } from "../prompt-schema/model-policy.js";
 
 function buildStateModel(components: BuilderComponent[]): AppDefinition["stateModel"] {
   const stateModel: AppDefinition["stateModel"] = {};
@@ -110,11 +111,11 @@ export function toAppDefinition(args: {
                     ? component.promptTemplate
                     : "Analyze {{customerComplaint}} and return sentiment and reply.",
                 variables: inputStateKeys,
-                modelPolicy: {
-                  provider: "mock",
-                  model: "mock-v1",
-                  temperature: 0.2,
-                },
+                modelPolicy: parseModelPolicyDraft({
+                  provider: component.modelProvider,
+                  model: component.modelName,
+                  temperature: component.modelTemperature,
+                }).policy,
                 outputSchema: {
                   type: "object",
                   shape: parseOutputSchemaShape(component.outputSchemaJson).shape,
