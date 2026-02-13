@@ -280,6 +280,27 @@ pre {
   gap: 8px;
 }
 
+.validation-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.validation-undo {
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.validation-undo:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .validation-item {
   list-style: none;
   border: 1px solid #cbd5e1;

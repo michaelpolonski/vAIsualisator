@@ -75,6 +75,13 @@ interface DiagnosticFixAction {
   apply: () => void;
 }
 
+interface LastFixUndoState {
+  label: string;
+  workspace: BuilderWorkspaceSnapshot;
+  previewStateDraft: string;
+  previewStateDirty: boolean;
+}
+
 function extractBracedVariableToken(message: string): string | null {
   const match = message.match(/{{\s*([^}]+?)\s*}}/);
   const token = match?.[1]?.trim();
@@ -581,6 +588,10 @@ export function App(): JSX.Element {
   const [validationDiagnostics, setValidationDiagnostics] = useState<
     CompileDiagnostic[]
   >([]);
+  const [lastFixUndoState, setLastFixUndoState] = useState<LastFixUndoState | null>(
+    null,
+  );
+  const [validationFixStatus, setValidationFixStatus] = useState<string | null>(null);
   const [validationCheckedAtMs, setValidationCheckedAtMs] = useState<number | null>(
     null,
   );
@@ -1029,6 +1040,32 @@ export function App(): JSX.Element {
     [addConnection, componentById, components, updateComponent],
   );
 
+  const applyFixWithUndo = useCallback(
+    (fix: DiagnosticFixAction): void => {
+      setLastFixUndoState({
+        label: fix.label,
+        workspace: currentWorkspace,
+        previewStateDraft,
+        previewStateDirty,
+      });
+      fix.apply();
+      setValidationFixStatus(`Applied fix: ${fix.label}`);
+    },
+    [currentWorkspace, previewStateDraft, previewStateDirty],
+  );
+
+  const undoLastFix = useCallback((): void => {
+    if (!lastFixUndoState) {
+      return;
+    }
+
+    loadWorkspaceSnapshot(lastFixUndoState.workspace);
+    setPreviewStateDraft(lastFixUndoState.previewStateDraft);
+    setPreviewStateDirty(lastFixUndoState.previewStateDirty);
+    setValidationFixStatus(`Undid fix: ${lastFixUndoState.label}`);
+    setLastFixUndoState(null);
+  }, [lastFixUndoState, loadWorkspaceSnapshot]);
+
   const navigateToDiagnostic = useCallback(
     (diagnostic: CompileDiagnostic): void => {
       const target = resolveDiagnosticTarget(diagnostic);
@@ -1117,6 +1154,8 @@ export function App(): JSX.Element {
       loadWorkspaceSnapshot(entry.workspace);
       setPreviewStateDraft(entry.previewStateDraft);
       setPreviewStateDirty(entry.previewStateDirty);
+      setLastFixUndoState(null);
+      setValidationFixStatus(null);
       setPreviewOutput(null);
       setPreviewSummary("No preview run yet.");
       setCompileSummary(`Restored snapshot from ${entry.savedAt}.`);
@@ -1297,6 +1336,8 @@ export function App(): JSX.Element {
         loadFromAppDefinition(parsed.data);
         setCompileSource("none");
         setCompileFiles([]);
+        setLastFixUndoState(null);
+        setValidationFixStatus(null);
         setPreviewOutput(null);
         setPreviewStateDirty(false);
         setPreviewSummary("No preview run yet.");
@@ -1488,7 +1529,17 @@ export function App(): JSX.Element {
 
         <section className="panel">
           <h2>Live Validation</h2>
+          <div className="validation-toolbar">
+            <button
+              className="validation-undo"
+              onClick={undoLastFix}
+              disabled={!lastFixUndoState}
+            >
+              Undo Last Fix
+            </button>
+          </div>
           <p className="meta">{validationSummary}</p>
+          {validationFixStatus && <p className="meta">{validationFixStatus}</p>}
           {validationCheckedAtMs && (
             <p className="meta">
               Last checked: {new Date(validationCheckedAtMs).toLocaleTimeString()}
@@ -1519,7 +1570,7 @@ export function App(): JSX.Element {
                         {fix && (
                           <button
                             className="validation-fix"
-                            onClick={() => fix.apply()}
+                            onClick={() => applyFixWithUndo(fix)}
                           >
                             {fix.label}
                           </button>
