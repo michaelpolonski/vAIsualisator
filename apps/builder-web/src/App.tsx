@@ -70,6 +70,17 @@ interface BuilderProviderStatusResponse {
   checkedAt: string;
 }
 
+interface ModelCatalogProviderEntry {
+  defaultModel: string;
+  models: string[];
+}
+
+interface BuilderModelCatalogResponse {
+  providers: Partial<Record<SupportedModelProvider, ModelCatalogProviderEntry>>;
+  fetchedAt: string;
+  source?: Partial<Record<SupportedModelProvider, string>>;
+}
+
 interface DiagnosticFixAction {
   label: string;
   apply: () => void;
@@ -684,6 +695,27 @@ async function fetchProviderStatusViaApi(): Promise<BuilderProviderStatusRespons
   return body as BuilderProviderStatusResponse;
 }
 
+async function fetchModelCatalogViaApi(): Promise<BuilderModelCatalogResponse> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/models/catalog`);
+
+  const body = (await response.json()) as
+    | BuilderModelCatalogResponse
+    | { error?: string; message?: string };
+
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Model catalog API failed";
+    throw new Error(message);
+  }
+
+  return body as BuilderModelCatalogResponse;
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
@@ -737,6 +769,12 @@ export function App(): JSX.Element {
   );
   const [providerStatus, setProviderStatus] = useState<
     Partial<Record<SupportedModelProvider, ProviderStatusItem>> | null
+  >(null);
+  const [modelCatalogSummary, setModelCatalogSummary] = useState(
+    "Model catalog unavailable.",
+  );
+  const [modelCatalog, setModelCatalog] = useState<
+    Partial<Record<SupportedModelProvider, ModelCatalogProviderEntry>> | null
   >(null);
   const [snapshotHistory, setSnapshotHistory] = useState<SnapshotEntry[]>([]);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
@@ -952,6 +990,33 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  useEffect(() => {
+    let canceled = false;
+    void (async () => {
+      try {
+        const catalog = await fetchModelCatalogViaApi();
+        if (canceled) {
+          return;
+        }
+        setModelCatalog(catalog.providers);
+        const openaiCount = catalog.providers.openai?.models?.length ?? 0;
+        const anthropicCount = catalog.providers.anthropic?.models?.length ?? 0;
+        setModelCatalogSummary(
+          `Model catalog ready: openai ${openaiCount}, anthropic ${anthropicCount}.`,
+        );
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        setModelCatalog(null);
+        setModelCatalogSummary(`Model catalog unavailable: ${(error as Error).message}`);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
@@ -2043,6 +2108,29 @@ export function App(): JSX.Element {
             >
               Refresh Providers
             </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const catalog = await fetchModelCatalogViaApi();
+                    setModelCatalog(catalog.providers);
+                    const openaiCount = catalog.providers.openai?.models?.length ?? 0;
+                    const anthropicCount =
+                      catalog.providers.anthropic?.models?.length ?? 0;
+                    setModelCatalogSummary(
+                      `Model catalog ready: openai ${openaiCount}, anthropic ${anthropicCount}.`,
+                    );
+                  } catch (error) {
+                    setModelCatalog(null);
+                    setModelCatalogSummary(
+                      `Model catalog unavailable: ${(error as Error).message}`,
+                    );
+                  }
+                })();
+              }}
+            >
+              Refresh Models
+            </button>
             <button onClick={saveSnapshot}>Save Snapshot</button>
             <button onClick={clearSnapshotHistory}>Clear History</button>
           </div>
@@ -2055,6 +2143,8 @@ export function App(): JSX.Element {
           <PromptEditor
             providerStatus={providerStatus}
             providerStatusSummary={providerStatusSummary}
+            modelCatalog={modelCatalog}
+            modelCatalogSummary={modelCatalogSummary}
           />
         </section>
 

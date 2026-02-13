@@ -17,9 +17,16 @@ interface ProviderStatusItem {
   reason: string | null;
 }
 
+interface ModelCatalogProviderEntry {
+  defaultModel: string;
+  models: string[];
+}
+
 export function PromptEditor(props: {
   providerStatus?: Partial<Record<SupportedModelProvider, ProviderStatusItem>> | null;
   providerStatusSummary?: string;
+  modelCatalog?: Partial<Record<SupportedModelProvider, ModelCatalogProviderEntry>> | null;
+  modelCatalogSummary?: string;
 }): JSX.Element {
   const selectedId = useBuilderStore((state) => state.selectedComponentId);
   const promptEditorFocusToken = useBuilderStore(
@@ -31,7 +38,11 @@ export function PromptEditor(props: {
   const selected = components.find((item) => item.id === selectedId);
   const selectedProvider = selected?.modelProvider ?? DEFAULT_MODEL_POLICY.provider;
   const selectedModelName = selected?.modelName ?? DEFAULT_MODEL_POLICY.model;
-  const modelPresets = getModelPresetsForProvider(selectedProvider);
+  const modelPresets =
+    props.modelCatalog?.[selectedProvider]?.models?.length
+      ? props.modelCatalog[selectedProvider]!.models
+      : getModelPresetsForProvider(selectedProvider);
+  const defaultModelFromCatalog = props.modelCatalog?.[selectedProvider]?.defaultModel;
   const selectedProviderStatus = props.providerStatus?.[selectedProvider];
   const editorRef = useRef<HTMLElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -153,6 +164,7 @@ export function PromptEditor(props: {
         {props.providerStatusSummary && (
           <p className="meta">{props.providerStatusSummary}</p>
         )}
+        {props.modelCatalogSummary && <p className="meta">{props.modelCatalogSummary}</p>}
         {selectedProviderStatus && !selectedProviderStatus.available && (
           <div className="warning-box">
             <div className="warning-title">Provider Not Ready</div>
@@ -174,12 +186,12 @@ export function PromptEditor(props: {
                   | "anthropic"
                   | "mock";
                 const currentModel = selected.modelName?.trim() ?? "";
+                const nextDefault =
+                  props.modelCatalog?.[nextProvider]?.defaultModel ??
+                  getDefaultModelForProvider(nextProvider);
                 update(selected.id, {
                   modelProvider: nextProvider,
-                  modelName:
-                    currentModel.length > 0
-                      ? currentModel
-                      : getDefaultModelForProvider(nextProvider),
+                  modelName: currentModel.length > 0 ? currentModel : nextDefault,
                 });
               }}
             >
@@ -198,7 +210,7 @@ export function PromptEditor(props: {
                   modelName: event.target.value,
                 })
               }
-              placeholder="model name"
+              placeholder={defaultModelFromCatalog ?? "model name"}
             />
           </label>
           <div>

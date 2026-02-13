@@ -115,11 +115,72 @@ function createWorkspaceYaml(): string {
   return ["packages:", "  - \"apps/*\"", "  - \"packages/*\"", ""].join("\n");
 }
 
+function parseModelCatalogEnv(value: string | undefined): string[] {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return [];
+  }
+
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // fall through to delimiter parsing
+    }
+  }
+
+  return raw
+    .split(/[\n,]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export async function registerBuilderRoutes(app: FastifyInstance): Promise<void> {
   app.get("/builder/providers/status", async (_request, reply) => {
     return reply.send({
       providers: getProviderStatusSnapshot(process.env),
       checkedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/builder/models/catalog", async (_request, reply) => {
+    const openaiModels = parseModelCatalogEnv(process.env.FORM_BUILDER_OPENAI_MODELS);
+    const anthropicModels = parseModelCatalogEnv(
+      process.env.FORM_BUILDER_ANTHROPIC_MODELS,
+    );
+
+    const openaiDefault =
+      process.env.FORM_BUILDER_OPENAI_DEFAULT_MODEL?.trim() ||
+      openaiModels[0] ||
+      "gpt-5.2";
+    const anthropicDefault =
+      process.env.FORM_BUILDER_ANTHROPIC_DEFAULT_MODEL?.trim() ||
+      anthropicModels[0] ||
+      "claude-sonnet-4-0";
+
+    return reply.send({
+      providers: {
+        mock: { defaultModel: "mock-v1", models: ["mock-v1"] },
+        openai: {
+          defaultModel: openaiDefault,
+          models: openaiModels.length > 0 ? openaiModels : [openaiDefault],
+        },
+        anthropic: {
+          defaultModel: anthropicDefault,
+          models: anthropicModels.length > 0 ? anthropicModels : [anthropicDefault],
+        },
+      },
+      fetchedAt: new Date().toISOString(),
+      source: {
+        openai: openaiModels.length > 0 ? "env" : "default",
+        anthropic: anthropicModels.length > 0 ? "env" : "default",
+      },
     });
   });
 

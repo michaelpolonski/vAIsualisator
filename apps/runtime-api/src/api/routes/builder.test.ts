@@ -29,6 +29,34 @@ describe("builder compile route", () => {
     await app.close();
   });
 
+  it("returns a model catalog snapshot", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/builder/models/catalog",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      providers: {
+        mock: { defaultModel: string; models: string[] };
+        openai: { defaultModel: string; models: string[] };
+        anthropic: { defaultModel: string; models: string[] };
+      };
+      fetchedAt: string;
+      source: { openai: string; anthropic: string };
+    };
+
+    expect(body.providers.mock.models[0]).toBe("mock-v1");
+    expect(typeof body.providers.openai.defaultModel).toBe("string");
+    expect(Array.isArray(body.providers.openai.models)).toBe(true);
+    expect(typeof body.fetchedAt).toBe("string");
+
+    await app.close();
+  });
+
   it("compiles app schema and returns file metadata", async () => {
     const app = Fastify();
     await registerBuilderRoutes(app);
