@@ -105,6 +105,14 @@ function buildPreviewState(app: AppDefinition): Record<string, unknown> {
   return state;
 }
 
+function parsePreviewStateDraft(input: string): Record<string, unknown> {
+  const parsed = JSON.parse(input) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Preview state must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function downloadJsonFile(filename: string, payload: unknown): void {
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -221,6 +229,8 @@ export function App(): JSX.Element {
   const [compileSource, setCompileSource] = useState<CompileSource>("none");
   const [previewSummary, setPreviewSummary] = useState("No preview run yet.");
   const [previewOutput, setPreviewOutput] = useState<BuilderPreviewResponse | null>(null);
+  const [previewStateDirty, setPreviewStateDirty] = useState(false);
+  const [previewStateDraft, setPreviewStateDraft] = useState("{}");
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -235,6 +245,25 @@ export function App(): JSX.Element {
       }),
     [appId, version, components, connections],
   );
+
+  const defaultPreviewStateText = useMemo(
+    () => JSON.stringify(buildPreviewState(schema), null, 2),
+    [schema],
+  );
+
+  useEffect(() => {
+    if (!previewStateDirty) {
+      setPreviewStateDraft(defaultPreviewStateText);
+    }
+  }, [defaultPreviewStateText, previewStateDirty]);
+
+  const selectedPreviewEventId = useMemo(() => {
+    const selectedButton = components.find(
+      (component) =>
+        component.id === selectedComponentId && component.type === "Button",
+    );
+    return selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
+  }, [components, selectedComponentId, schema.events]);
 
   const compileNow = useCallback(async (): Promise<void> => {
     setCompileSummary("Compiling...");
@@ -388,6 +417,9 @@ export function App(): JSX.Element {
         loadFromAppDefinition(parsed.data);
         setCompileSource("none");
         setCompileFiles([]);
+        setPreviewOutput(null);
+        setPreviewStateDirty(false);
+        setPreviewSummary("No preview run yet.");
         setCompileSummary(
           `Imported app '${parsed.data.appId}' from bundle (${file.name}).`,
         );
@@ -401,12 +433,7 @@ export function App(): JSX.Element {
   );
 
   const previewRuntime = useCallback(async (): Promise<void> => {
-    const selectedButton = components.find(
-      (component) =>
-        component.id === selectedComponentId && component.type === "Button",
-    );
-    const selectedEventId =
-      selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
+    const selectedEventId = selectedPreviewEventId;
 
     if (!selectedEventId) {
       setPreviewSummary("No event available to preview.");
@@ -418,7 +445,7 @@ export function App(): JSX.Element {
     setPreviewOutput(null);
 
     try {
-      const previewState = buildPreviewState(schema);
+      const previewState = parsePreviewStateDraft(previewStateDraft);
       const result = await previewViaApi({
         app: schema,
         eventId: selectedEventId,
@@ -431,11 +458,11 @@ export function App(): JSX.Element {
       );
     } catch (error) {
       setPreviewSummary(
-        `Preview failed: ${(error as Error).message}. Ensure runtime API is running and model/provider settings are valid.`,
+        `Preview failed: ${(error as Error).message}. Ensure runtime API is running, preview JSON is valid, and model/provider settings are valid.`,
       );
       setPreviewOutput(null);
     }
-  }, [components, selectedComponentId, schema]);
+  }, [selectedPreviewEventId, previewStateDraft, schema]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -535,6 +562,29 @@ export function App(): JSX.Element {
 
         <section className="panel">
           <h2>Runtime Preview</h2>
+          <p className="meta">
+            Event: {selectedPreviewEventId ?? "none"} (select a button to target its event)
+          </p>
+          <textarea
+            className="preview-state-input"
+            value={previewStateDraft}
+            onChange={(event) => {
+              setPreviewStateDraft(event.target.value);
+              setPreviewStateDirty(true);
+            }}
+            placeholder='{"customerComplaint":"The response was slow."}'
+          />
+          <div className="header-actions">
+            <button onClick={() => void previewRuntime()}>Run Preview</button>
+            <button
+              onClick={() => {
+                setPreviewStateDraft(defaultPreviewStateText);
+                setPreviewStateDirty(false);
+              }}
+            >
+              Reset Preview State
+            </button>
+          </div>
           <pre>{previewSummary}</pre>
           {previewOutput && <pre>{JSON.stringify(previewOutput, null, 2)}</pre>}
         </section>

@@ -150,6 +150,17 @@ body {
   min-height: 120px;
 }
 
+.preview-state-input {
+  width: 100%;
+  min-height: 160px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
 .chips {
   display: flex;
   gap: 8px;
