@@ -168,6 +168,7 @@ type CompileSource = "none" | "api" | "local";
 const AUTOSAVE_STORAGE_KEY = "form-first-builder.autosave.v1";
 const SNAPSHOT_HISTORY_STORAGE_KEY = "form-first-builder.snapshots.v1";
 const MUTED_VALIDATION_RULES_STORAGE_KEY = "form-first-builder.validation-muted.v1";
+const MUTED_VALIDATION_CODES_STORAGE_KEY = "form-first-builder.validation-muted-codes.v1";
 const VALIDATION_PREFS_STORAGE_KEY = "form-first-builder.validation-prefs.v1";
 const MAX_SNAPSHOT_HISTORY = 20;
 
@@ -416,6 +417,24 @@ function parseMutedValidationRules(value: unknown): string[] | null {
   }
 
   return record.rules
+    .filter((item): item is string => typeof item === "string")
+    .filter((item) => item.length > 0);
+}
+
+function parseMutedValidationCodes(value: unknown): string[] | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.kind !== "form-first-builder-validation-muted-codes-v1") {
+    return null;
+  }
+  if (!Array.isArray(record.codes)) {
+    return null;
+  }
+
+  return record.codes
     .filter((item): item is string => typeof item === "string")
     .filter((item) => item.length > 0);
 }
@@ -692,6 +711,7 @@ export function App(): JSX.Element {
     CompileDiagnostic[]
   >([]);
   const [mutedValidationRules, setMutedValidationRules] = useState<string[]>([]);
+  const [mutedValidationCodes, setMutedValidationCodes] = useState<string[]>([]);
   const [showValidationErrors, setShowValidationErrors] = useState(true);
   const [showValidationWarnings, setShowValidationWarnings] = useState(true);
   const [showMutedDiagnostics, setShowMutedDiagnostics] = useState(false);
@@ -757,13 +777,29 @@ export function App(): JSX.Element {
     [mutedValidationRules],
   );
 
+  const mutedCodeSet = useMemo(
+    () => new Set(mutedValidationCodes),
+    [mutedValidationCodes],
+  );
+
   const mutedDiagnosticsFromAll = useMemo(
     () =>
       allValidationDiagnostics.filter((item) =>
-        mutedRuleSet.has(buildDiagnosticRuleKey(item)),
+        mutedRuleSet.has(buildDiagnosticRuleKey(item)) || mutedCodeSet.has(item.code),
       ),
-    [allValidationDiagnostics, mutedRuleSet],
+    [allValidationDiagnostics, mutedCodeSet, mutedRuleSet],
   );
+
+  const mutedCodeCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of allValidationDiagnostics) {
+      if (!mutedCodeSet.has(item.code)) {
+        continue;
+      }
+      counts[item.code] = (counts[item.code] ?? 0) + 1;
+    }
+    return counts;
+  }, [allValidationDiagnostics, mutedCodeSet]);
 
   useEffect(() => {
     if (!previewStateDirty) {
@@ -803,25 +839,35 @@ export function App(): JSX.Element {
             providerStatus,
           });
           const mergedDiagnostics = [...result.diagnostics, ...guardrailDiagnostics];
-          const visibleDiagnostics = mergedDiagnostics.filter((item) => {
+          const isMuted = (item: CompileDiagnostic): boolean =>
+            mutedRuleSet.has(buildDiagnosticRuleKey(item)) || mutedCodeSet.has(item.code);
+          const isSeverityHidden = (item: CompileDiagnostic): boolean => {
             if (item.severity === "error" && !showValidationErrors) {
-              return false;
+              return true;
             }
             if (item.severity === "warning" && !showValidationWarnings) {
+              return true;
+            }
+            return false;
+          };
+          const hideMuted = !showMutedDiagnostics;
+
+          const visibleDiagnostics = mergedDiagnostics.filter((item) => {
+            if (isSeverityHidden(item)) {
               return false;
             }
-            if (
-              !showMutedDiagnostics &&
-              mutedRuleSet.has(buildDiagnosticRuleKey(item))
-            ) {
+            if (hideMuted && isMuted(item)) {
               return false;
             }
             return true;
           });
-          const hiddenByMute = mergedDiagnostics.filter((item) =>
-            mutedRuleSet.has(buildDiagnosticRuleKey(item)),
-          ).length;
-          const hiddenBySeverity = mergedDiagnostics.length - visibleDiagnostics.length;
+
+          const hiddenBySeverity = mergedDiagnostics.filter(isSeverityHidden).length;
+          const hiddenByMute =
+            hideMuted
+              ? mergedDiagnostics.filter((item) => isMuted(item) && !isSeverityHidden(item))
+                  .length
+              : 0;
           const baseSummary = buildValidationSummary(visibleDiagnostics);
           const hiddenParts: string[] = [];
           if (!showMutedDiagnostics && hiddenByMute > 0) {
@@ -863,6 +909,7 @@ export function App(): JSX.Element {
     components,
     connections,
     mutedRuleSet,
+    mutedCodeSet,
     providerStatus,
     schema,
     showMutedDiagnostics,
@@ -983,6 +1030,30 @@ export function App(): JSX.Element {
     };
     localStorage.setItem(MUTED_VALIDATION_RULES_STORAGE_KEY, JSON.stringify(payload));
   }, [mutedValidationRules]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(MUTED_VALIDATION_CODES_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = parseMutedValidationCodes(JSON.parse(raw));
+      if (!parsed) {
+        return;
+      }
+      setMutedValidationCodes(parsed);
+    } catch {
+      setMutedValidationCodes([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    const payload = {
+      kind: "form-first-builder-validation-muted-codes-v1",
+      codes: mutedValidationCodes,
+    };
+    localStorage.setItem(MUTED_VALIDATION_CODES_STORAGE_KEY, JSON.stringify(payload));
+  }, [mutedValidationCodes]);
 
   useEffect(() => {
     try {
@@ -1345,15 +1416,36 @@ export function App(): JSX.Element {
     setValidationFixStatus(`Ignored diagnostic rule: ${diagnostic.code}`);
   }, []);
 
+  const ignoreDiagnosticCode = useCallback((diagnostic: CompileDiagnostic): void => {
+    const code = diagnostic.code;
+    setMutedValidationCodes((prev) => {
+      if (prev.includes(code)) {
+        return prev;
+      }
+      return [...prev, code];
+    });
+    setValidationFixStatus(`Ignored diagnostic code: ${diagnostic.code}`);
+  }, []);
+
   const clearMutedValidationRules = useCallback((): void => {
     setMutedValidationRules([]);
     setValidationFixStatus("Cleared muted validation rules.");
+  }, []);
+
+  const clearMutedValidationCodes = useCallback((): void => {
+    setMutedValidationCodes([]);
+    setValidationFixStatus("Cleared muted validation codes.");
   }, []);
 
   const unmuteValidationRule = useCallback((rule: string): void => {
     setMutedValidationRules((prev) => prev.filter((item) => item !== rule));
     const parsed = parseDiagnosticRuleKey(rule);
     setValidationFixStatus(`Unmuted diagnostic rule: ${parsed.code}`);
+  }, []);
+
+  const unmuteValidationCode = useCallback((code: string): void => {
+    setMutedValidationCodes((prev) => prev.filter((item) => item !== code));
+    setValidationFixStatus(`Unmuted diagnostic code: ${code}`);
   }, []);
 
   const navigateToDiagnostic = useCallback(
@@ -1555,6 +1647,10 @@ export function App(): JSX.Element {
             kind: "form-first-builder-validation-muted-v1",
             rules: mutedValidationRules,
           },
+          mutedValidationCodes: {
+            kind: "form-first-builder-validation-muted-codes-v1",
+            codes: mutedValidationCodes,
+          },
           validationPrefs: {
             kind: "form-first-builder-validation-prefs-v1",
             showErrors: showValidationErrors,
@@ -1605,6 +1701,10 @@ export function App(): JSX.Element {
             kind: "form-first-builder-validation-muted-v1",
             rules: mutedValidationRules,
           },
+          mutedValidationCodes: {
+            kind: "form-first-builder-validation-muted-codes-v1",
+            codes: mutedValidationCodes,
+          },
           validationPrefs: {
             kind: "form-first-builder-validation-prefs-v1",
             showErrors: showValidationErrors,
@@ -1620,6 +1720,7 @@ export function App(): JSX.Element {
       );
     }
   }, [
+    mutedValidationCodes,
     mutedValidationRules,
     schema,
     showMutedDiagnostics,
@@ -1667,6 +1768,13 @@ export function App(): JSX.Element {
           : null;
         if (importedMutedRules) {
           setMutedValidationRules(importedMutedRules);
+        }
+
+        const importedMutedCodes = builderPreferences
+          ? parseMutedValidationCodes(builderPreferences.mutedValidationCodes)
+          : null;
+        if (importedMutedCodes) {
+          setMutedValidationCodes(importedMutedCodes);
         }
 
         const importedValidationPrefs = builderPreferences
@@ -1931,7 +2039,14 @@ export function App(): JSX.Element {
               onClick={clearMutedValidationRules}
               disabled={mutedValidationRules.length === 0}
             >
-              Clear Muted ({mutedValidationRules.length})
+              Clear Muted Rules ({mutedValidationRules.length})
+            </button>
+            <button
+              className="validation-clear-muted-codes"
+              onClick={clearMutedValidationCodes}
+              disabled={mutedValidationCodes.length === 0}
+            >
+              Clear Muted Codes ({mutedValidationCodes.length})
             </button>
             <button
               className="validation-apply-all"
@@ -1953,12 +2068,39 @@ export function App(): JSX.Element {
           <p className="meta">
             Total diagnostics: {allValidationDiagnostics.length}. Visible:{" "}
             {validationDiagnostics.length}. Muted rules: {mutedValidationRules.length}.
+            {" "}Muted codes: {mutedValidationCodes.length}.
           </p>
           {validationFixStatus && <p className="meta">{validationFixStatus}</p>}
           {validationCheckedAtMs && (
             <p className="meta">
               Last checked: {new Date(validationCheckedAtMs).toLocaleTimeString()}
             </p>
+          )}
+          {mutedValidationCodes.length > 0 && (
+            <details className="muted-rules">
+              <summary>Muted Codes</summary>
+              <ul className="muted-rule-list">
+                {mutedValidationCodes
+                  .slice()
+                  .sort()
+                  .map((code) => (
+                    <li key={code} className="muted-rule-item">
+                      <div className="muted-rule-body">
+                        <code>{code}</code>
+                        <span className="meta">
+                          Muted diagnostics: {mutedCodeCounts[code] ?? 0}
+                        </span>
+                      </div>
+                      <button
+                        className="validation-ignore"
+                        onClick={() => unmuteValidationCode(code)}
+                      >
+                        Unmute
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </details>
           )}
           {mutedValidationRules.length > 0 && (
             <details className="muted-rules">
@@ -1991,7 +2133,9 @@ export function App(): JSX.Element {
                 const target = resolveDiagnosticTarget(diagnostic);
                 const fix = resolveDiagnosticFix(diagnostic, target);
                 const ruleKey = buildDiagnosticRuleKey(diagnostic);
-                const muted = mutedRuleSet.has(ruleKey);
+                const mutedByRule = mutedRuleSet.has(ruleKey);
+                const mutedByCode = mutedCodeSet.has(diagnostic.code);
+                const muted = mutedByRule || mutedByCode;
                 return (
                   <li
                     key={`${diagnostic.code}-${diagnostic.message}-${index}`}
@@ -2014,12 +2158,22 @@ export function App(): JSX.Element {
                         <button
                           className="validation-ignore"
                           onClick={() =>
-                            muted
+                            mutedByRule
                               ? unmuteValidationRule(ruleKey)
                               : ignoreDiagnosticRule(diagnostic)
                           }
                         >
-                          {muted ? "Unmute" : "Ignore"}
+                          {mutedByRule ? "Unmute Rule" : "Ignore Rule"}
+                        </button>
+                        <button
+                          className="validation-ignore-code"
+                          onClick={() =>
+                            mutedByCode
+                              ? unmuteValidationCode(diagnostic.code)
+                              : ignoreDiagnosticCode(diagnostic)
+                          }
+                        >
+                          {mutedByCode ? "Unmute Code" : "Ignore Code"}
                         </button>
                         {fix && (
                           <button

@@ -324,6 +324,21 @@ pre {
   cursor: not-allowed;
 }
 
+.validation-clear-muted-codes {
+  border: 1px solid #0ea5e9;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.validation-clear-muted-codes:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .validation-undo {
   border: 1px solid #94a3b8;
   background: #ffffff;
@@ -416,6 +431,16 @@ pre {
   border: 1px solid #94a3b8;
   background: #f8fafc;
   color: #334155;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.validation-ignore-code {
+  border: 1px solid #0ea5e9;
+  background: #f0f9ff;
+  color: #0c4a6e;
   border-radius: 6px;
   padding: 3px 8px;
   font-size: 11px;
