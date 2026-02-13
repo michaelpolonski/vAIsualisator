@@ -12,9 +12,12 @@ import { Palette } from "./palette/Palette.js";
 import { Canvas } from "./canvas/Canvas.js";
 import { PromptEditor } from "./prompt-editor/PromptEditor.js";
 import {
+  getPromptDiagnosticsForButton,
   parseBuilderWorkspaceSnapshot,
   useBuilderStore,
   type BuilderWorkspaceSnapshot,
+  type BuilderConnection,
+  type BuilderComponent,
   type BuilderComponentType,
 } from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
@@ -59,6 +62,66 @@ interface ProviderStatusItem {
 interface BuilderProviderStatusResponse {
   providers: Partial<Record<SupportedModelProvider, ProviderStatusItem>>;
   checkedAt: string;
+}
+
+function buildBuilderGuardrailDiagnostics(args: {
+  components: BuilderComponent[];
+  connections: BuilderConnection[];
+  providerStatus: Partial<Record<SupportedModelProvider, ProviderStatusItem>> | null;
+}): CompileDiagnostic[] {
+  const diagnostics: CompileDiagnostic[] = [];
+
+  for (const component of args.components) {
+    if (component.type !== "Button") {
+      continue;
+    }
+
+    const promptDiagnostics = getPromptDiagnosticsForButton({
+      components: args.components,
+      connections: args.connections,
+      buttonId: component.id,
+    });
+
+    if (promptDiagnostics.invalidOutputSchema) {
+      diagnostics.push({
+        code: "BUILDER_INVALID_OUTPUT_SCHEMA",
+        severity: "warning",
+        path: `ui.components.${component.id}.outputSchemaJson`,
+        message: promptDiagnostics.invalidOutputSchema,
+      });
+    }
+
+    for (const issue of promptDiagnostics.invalidModelPolicy) {
+      diagnostics.push({
+        code: "BUILDER_INVALID_MODEL_POLICY",
+        severity: "warning",
+        path: `ui.components.${component.id}.modelPolicy`,
+        message: issue,
+      });
+    }
+
+    for (const variable of promptDiagnostics.disconnectedVariables) {
+      diagnostics.push({
+        code: "BUILDER_DISCONNECTED_VARIABLE",
+        severity: "warning",
+        path: `ui.components.${component.id}.promptTemplate`,
+        message: `Variable '{{${variable}}}' is not connected to this button event input path.`,
+      });
+    }
+
+    const provider = component.modelProvider ?? "mock";
+    const providerStatus = args.providerStatus?.[provider];
+    if (providerStatus && !providerStatus.available) {
+      diagnostics.push({
+        code: "BUILDER_PROVIDER_UNAVAILABLE",
+        severity: "warning",
+        path: `ui.components.${component.id}.modelProvider`,
+        message: `Provider '${provider}' is unavailable: ${providerStatus.reason ?? "missing credentials."}`,
+      });
+    }
+  }
+
+  return diagnostics;
 }
 
 type CompileSource = "none" | "api" | "local";
@@ -584,11 +647,17 @@ export function App(): JSX.Element {
       void (async () => {
         try {
           const result = await compileLocally({ app: schema });
+          const guardrailDiagnostics = buildBuilderGuardrailDiagnostics({
+            components,
+            connections,
+            providerStatus,
+          });
+          const mergedDiagnostics = [...result.diagnostics, ...guardrailDiagnostics];
           if (canceled) {
             return;
           }
-          setValidationDiagnostics(result.diagnostics);
-          setValidationSummary(buildValidationSummary(result.diagnostics));
+          setValidationDiagnostics(mergedDiagnostics);
+          setValidationSummary(buildValidationSummary(mergedDiagnostics));
           setValidationCheckedAtMs(Date.now());
         } catch (error) {
           if (canceled) {
@@ -607,7 +676,7 @@ export function App(): JSX.Element {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [schema]);
+  }, [components, connections, providerStatus, schema]);
 
   useEffect(() => {
     let canceled = false;
@@ -1233,6 +1302,33 @@ export function App(): JSX.Element {
               }}
             >
               Clear Autosave
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const status = await fetchProviderStatusViaApi();
+                    setProviderStatus(status.providers);
+                    const providerNames = (
+                      Object.keys(status.providers) as SupportedModelProvider[]
+                    )
+                      .filter((provider) => status.providers[provider]?.available)
+                      .join(", ");
+                    setProviderStatusSummary(
+                      providerNames.length > 0
+                        ? `Providers ready: ${providerNames}`
+                        : "No external providers configured. Mock is available.",
+                    );
+                  } catch (error) {
+                    setProviderStatus(null);
+                    setProviderStatusSummary(
+                      `Provider status unavailable: ${(error as Error).message}`,
+                    );
+                  }
+                })();
+              }}
+            >
+              Refresh Providers
             </button>
             <button onClick={saveSnapshot}>Save Snapshot</button>
             <button onClick={clearSnapshotHistory}>Clear History</button>
