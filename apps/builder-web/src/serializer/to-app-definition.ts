@@ -6,6 +6,8 @@ import type {
 import { parseOutputSchemaShape } from "../prompt-schema/output-schema.js";
 import { parseModelPolicyDraft } from "../prompt-schema/model-policy.js";
 
+const TEMPLATE_TOKEN_REGEX = /{{\s*([^}]+?)\s*}}/g;
+
 function buildStateModel(components: BuilderComponent[]): AppDefinition["stateModel"] {
   const stateModel: AppDefinition["stateModel"] = {};
 
@@ -34,6 +36,47 @@ function buildStateModel(components: BuilderComponent[]): AppDefinition["stateMo
   return stateModel;
 }
 
+function normalizeLookupKey(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, "");
+}
+
+function buildPromptAliasMap(components: BuilderComponent[]): Map<string, string> {
+  const aliasMap = new Map<string, string>();
+
+  for (const component of components) {
+    if (component.type !== "TextArea" || !component.stateKey) {
+      continue;
+    }
+
+    aliasMap.set(component.stateKey, component.stateKey);
+    aliasMap.set(component.label, component.stateKey);
+    aliasMap.set(normalizeLookupKey(component.stateKey), component.stateKey);
+    aliasMap.set(normalizeLookupKey(component.label), component.stateKey);
+  }
+
+  return aliasMap;
+}
+
+function canonicalizePromptTemplate(args: {
+  template: string;
+  aliasMap: Map<string, string>;
+}): string {
+  return args.template.replace(TEMPLATE_TOKEN_REGEX, (_match, rawKey: string) => {
+    const token = String(rawKey ?? "").trim();
+    if (!token) {
+      return "{{}}";
+    }
+    const mapped =
+      args.aliasMap.get(token) ?? args.aliasMap.get(normalizeLookupKey(token));
+    return mapped ? `{{${mapped}}}` : `{{${token}}}`;
+  });
+}
+
 export function toAppDefinition(args: {
   appId: string;
   version: string;
@@ -47,6 +90,7 @@ export function toAppDefinition(args: {
     (component) => component.type === "DataTable",
   );
   const componentById = new Map(components.map((item) => [item.id, item]));
+  const promptAliases = buildPromptAliasMap(components);
 
   for (const component of components) {
     if (component.type === "TextArea") {
@@ -106,10 +150,13 @@ export function toAppDefinition(args: {
               id: `${eventId}_prompt`,
               kind: "PromptTask",
               promptSpec: {
-                template:
-                  component.promptTemplate && component.promptTemplate.length > 0
-                    ? component.promptTemplate
-                    : "Analyze {{customerComplaint}} and return sentiment and reply.",
+                template: canonicalizePromptTemplate({
+                  template:
+                    component.promptTemplate && component.promptTemplate.length > 0
+                      ? component.promptTemplate
+                      : "Analyze {{customerComplaint}} and return sentiment and reply.",
+                  aliasMap: promptAliases,
+                }),
                 variables: inputStateKeys,
                 modelPolicy: parseModelPolicyDraft({
                   provider: component.modelProvider,
