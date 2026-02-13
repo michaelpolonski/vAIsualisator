@@ -298,6 +298,12 @@ pre {
   align-items: center;
 }
 
+.validation-action-row {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .validation-item.error {
   border-color: #fca5a5;
   background: #fef2f2;
@@ -331,6 +337,16 @@ pre {
 .validation-nav:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.validation-fix {
+  border: 1px solid #10b981;
+  background: #ecfdf5;
+  color: #065f46;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .event-node-list {

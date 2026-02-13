@@ -12,6 +12,7 @@ import { Palette } from "./palette/Palette.js";
 import { Canvas } from "./canvas/Canvas.js";
 import { PromptEditor } from "./prompt-editor/PromptEditor.js";
 import {
+  getPromptVariables,
   getPromptDiagnosticsForButton,
   parseBuilderWorkspaceSnapshot,
   useBuilderStore,
@@ -21,7 +22,12 @@ import {
   type BuilderComponentType,
 } from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
-import type { SupportedModelProvider } from "./prompt-schema/model-policy.js";
+import {
+  DEFAULT_MODEL_POLICY,
+  getDefaultModelForProvider,
+  type SupportedModelProvider,
+} from "./prompt-schema/model-policy.js";
+import { DEFAULT_OUTPUT_SCHEMA_JSON } from "./prompt-schema/output-schema.js";
 import "./styles.css";
 
 interface CompileDiagnostic {
@@ -62,6 +68,17 @@ interface ProviderStatusItem {
 interface BuilderProviderStatusResponse {
   providers: Partial<Record<SupportedModelProvider, ProviderStatusItem>>;
   checkedAt: string;
+}
+
+interface DiagnosticFixAction {
+  label: string;
+  apply: () => void;
+}
+
+function extractBracedVariableToken(message: string): string | null {
+  const match = message.match(/{{\s*([^}]+?)\s*}}/);
+  const token = match?.[1]?.trim();
+  return token && token.length > 0 ? token : null;
 }
 
 function buildBuilderGuardrailDiagnostics(args: {
@@ -546,6 +563,8 @@ export function App(): JSX.Element {
   const connections = useBuilderStore((state) => state.connections);
   const selectedComponentId = useBuilderStore((state) => state.selectedComponentId);
   const addComponent = useBuilderStore((state) => state.addComponent);
+  const addConnection = useBuilderStore((state) => state.addConnection);
+  const updateComponent = useBuilderStore((state) => state.updateComponent);
   const selectComponent = useBuilderStore((state) => state.selectComponent);
   const focusPromptEditor = useBuilderStore((state) => state.focusPromptEditor);
   const loadFromAppDefinition = useBuilderStore(
@@ -891,6 +910,123 @@ export function App(): JSX.Element {
       return null;
     },
     [componentById, eventToComponentId],
+  );
+
+  const resolveDiagnosticFix = useCallback(
+    (
+      diagnostic: CompileDiagnostic,
+      target: DiagnosticTarget | null,
+    ): DiagnosticFixAction | null => {
+      if (!target) {
+        return null;
+      }
+
+      const component = componentById.get(target.componentId);
+      if (!component || component.type !== "Button") {
+        return null;
+      }
+
+      if (diagnostic.code === "BUILDER_PROVIDER_UNAVAILABLE") {
+        return {
+          label: "Switch to mock",
+          apply: () => {
+            updateComponent(component.id, {
+              modelProvider: "mock",
+              modelName: getDefaultModelForProvider("mock"),
+            });
+          },
+        };
+      }
+
+      if (diagnostic.code === "BUILDER_INVALID_OUTPUT_SCHEMA") {
+        return {
+          label: "Reset Output Schema",
+          apply: () => {
+            updateComponent(component.id, {
+              outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON,
+            });
+          },
+        };
+      }
+
+      if (diagnostic.code === "BUILDER_INVALID_MODEL_POLICY") {
+        const provider = component.modelProvider ?? DEFAULT_MODEL_POLICY.provider;
+        const message = diagnostic.message.toLowerCase();
+        if (message.includes("temperature")) {
+          return {
+            label: "Reset Temperature",
+            apply: () => {
+              updateComponent(component.id, {
+                modelTemperature: String(DEFAULT_MODEL_POLICY.temperature),
+              });
+            },
+          };
+        }
+        if (message.includes("model name")) {
+          return {
+            label: "Set Default Model",
+            apply: () => {
+              updateComponent(component.id, {
+                modelName: getDefaultModelForProvider(provider),
+              });
+            },
+          };
+        }
+
+        return {
+          label: "Apply Model Defaults",
+          apply: () => {
+            updateComponent(component.id, {
+              modelName: getDefaultModelForProvider(provider),
+              modelTemperature: String(DEFAULT_MODEL_POLICY.temperature),
+            });
+          },
+        };
+      }
+
+      if (diagnostic.code === "BUILDER_DISCONNECTED_VARIABLE") {
+        const variable = extractBracedVariableToken(diagnostic.message);
+        if (!variable) {
+          return null;
+        }
+        const source = components.find(
+          (item) => item.type === "TextArea" && item.stateKey === variable,
+        );
+        if (!source) {
+          return null;
+        }
+        return {
+          label: `Connect {{${variable}}}`,
+          apply: () => {
+            addConnection(source.id, component.id);
+          },
+        };
+      }
+
+      if (diagnostic.code === "UNKNOWN_PROMPT_VARIABLE") {
+        const availableVariables = getPromptVariables(component.id);
+        const fallback = availableVariables[0];
+        if (!fallback) {
+          return null;
+        }
+        const token = `{{${fallback}}}`;
+        const existingTemplate = component.promptTemplate ?? "";
+        if (existingTemplate.includes(token)) {
+          return null;
+        }
+        return {
+          label: `Insert ${token}`,
+          apply: () => {
+            updateComponent(component.id, {
+              promptTemplate: `${existingTemplate} ${token}`.trim(),
+            });
+          },
+        };
+      }
+
+      return null;
+    },
+    [addConnection, componentById, components, updateComponent],
   );
 
   const navigateToDiagnostic = useCallback(
@@ -1362,6 +1498,7 @@ export function App(): JSX.Element {
             <ul className="validation-list">
               {validationDiagnostics.map((diagnostic, index) => {
                 const target = resolveDiagnosticTarget(diagnostic);
+                const fix = resolveDiagnosticFix(diagnostic, target);
                 return (
                   <li
                     key={`${diagnostic.code}-${diagnostic.message}-${index}`}
@@ -1371,13 +1508,23 @@ export function App(): JSX.Element {
                       <code className="validation-code">
                         {diagnostic.severity.toUpperCase()} {diagnostic.code}
                       </code>
-                      <button
-                        className="validation-nav"
-                        onClick={() => navigateToDiagnostic(diagnostic)}
-                        disabled={!target}
-                      >
-                        Go to Canvas
-                      </button>
+                      <div className="validation-action-row">
+                        <button
+                          className="validation-nav"
+                          onClick={() => navigateToDiagnostic(diagnostic)}
+                          disabled={!target}
+                        >
+                          Go to Canvas
+                        </button>
+                        {fix && (
+                          <button
+                            className="validation-fix"
+                            onClick={() => fix.apply()}
+                          >
+                            {fix.label}
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <span>{diagnostic.message}</span>
                     {diagnostic.path && (
