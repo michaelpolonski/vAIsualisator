@@ -39,6 +39,11 @@ interface BuilderCompileResponse {
   generatedAt: string;
 }
 
+interface BuilderPreviewResponse {
+  statePatch: Record<string, unknown>;
+  logs: Array<{ at: string; eventId: string; stage: string; message: string }>;
+}
+
 type CompileSource = "none" | "api" | "local";
 
 function getClientPoint(event: Event): { x: number; y: number } | null {
@@ -72,6 +77,32 @@ function createFileMetas(files: CompileFileContent[]): CompileFileMeta[] {
     path: file.path,
     bytes: new TextEncoder().encode(file.content).length,
   }));
+}
+
+function buildPreviewState(app: AppDefinition): Record<string, unknown> {
+  const state: Record<string, unknown> = {};
+
+  for (const [key, field] of Object.entries(app.stateModel)) {
+    if (field.type === "string") {
+      state[key] = `Preview input for ${key}`;
+      continue;
+    }
+    if (field.type === "number") {
+      state[key] = 0;
+      continue;
+    }
+    if (field.type === "boolean") {
+      state[key] = false;
+      continue;
+    }
+    if (field.type === "array") {
+      state[key] = [];
+      continue;
+    }
+    state[key] = null;
+  }
+
+  return state;
 }
 
 function downloadJsonFile(filename: string, payload: unknown): void {
@@ -142,11 +173,44 @@ async function compileLocally(args: {
   };
 }
 
+async function previewViaApi(args: {
+  app: AppDefinition;
+  eventId: string;
+  state: Record<string, unknown>;
+}): Promise<BuilderPreviewResponse> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/preview/events/${args.eventId}/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      app: args.app,
+      state: args.state,
+    }),
+  });
+
+  const body = (await response.json()) as
+    | BuilderPreviewResponse
+    | { error?: string; message?: string };
+
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Preview API failed";
+    throw new Error(message);
+  }
+
+  return body as BuilderPreviewResponse;
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
   const components = useBuilderStore((state) => state.components);
   const connections = useBuilderStore((state) => state.connections);
+  const selectedComponentId = useBuilderStore((state) => state.selectedComponentId);
   const addComponent = useBuilderStore((state) => state.addComponent);
   const loadFromAppDefinition = useBuilderStore(
     (state) => state.loadFromAppDefinition,
@@ -155,6 +219,8 @@ export function App(): JSX.Element {
   const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
   const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
   const [compileSource, setCompileSource] = useState<CompileSource>("none");
+  const [previewSummary, setPreviewSummary] = useState("No preview run yet.");
+  const [previewOutput, setPreviewOutput] = useState<BuilderPreviewResponse | null>(null);
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -334,6 +400,43 @@ export function App(): JSX.Element {
     [loadFromAppDefinition],
   );
 
+  const previewRuntime = useCallback(async (): Promise<void> => {
+    const selectedButton = components.find(
+      (component) =>
+        component.id === selectedComponentId && component.type === "Button",
+    );
+    const selectedEventId =
+      selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
+
+    if (!selectedEventId) {
+      setPreviewSummary("No event available to preview.");
+      setPreviewOutput(null);
+      return;
+    }
+
+    setPreviewSummary(`Running preview for event '${selectedEventId}'...`);
+    setPreviewOutput(null);
+
+    try {
+      const previewState = buildPreviewState(schema);
+      const result = await previewViaApi({
+        app: schema,
+        eventId: selectedEventId,
+        state: previewState,
+      });
+
+      setPreviewOutput(result);
+      setPreviewSummary(
+        `Preview executed via API for '${selectedEventId}'. Returned ${Object.keys(result.statePatch).length} state patch key(s) and ${result.logs.length} log entries.`,
+      );
+    } catch (error) {
+      setPreviewSummary(
+        `Preview failed: ${(error as Error).message}. Ensure runtime API is running and model/provider settings are valid.`,
+      );
+      setPreviewOutput(null);
+    }
+  }, [components, selectedComponentId, schema]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "F5") {
@@ -389,6 +492,7 @@ export function App(): JSX.Element {
           <h1>Form-First AI Builder</h1>
           <div className="header-actions">
             <button onClick={() => void compileNow()}>Run / Deploy (F5)</button>
+            <button onClick={() => void previewRuntime()}>Preview Runtime</button>
             <button onClick={() => void exportBundle()}>Export Bundle</button>
             <label className="import-label">
               Import Bundle
@@ -427,6 +531,12 @@ export function App(): JSX.Element {
               ))}
             </ul>
           )}
+        </section>
+
+        <section className="panel">
+          <h2>Runtime Preview</h2>
+          <pre>{previewSummary}</pre>
+          {previewOutput && <pre>{JSON.stringify(previewOutput, null, 2)}</pre>}
         </section>
       </main>
     </DndContext>

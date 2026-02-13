@@ -56,4 +56,32 @@ describe("builder compile route", () => {
 
     await app.close();
   });
+
+  it("executes preview event and returns state patch/logs", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/builder/preview/events/evt_analyze_click/execute",
+      payload: {
+        app: defaultApp,
+        state: {
+          customerComplaint: "The response time was too slow.",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      statePatch: Record<string, unknown>;
+      logs: Array<{ stage: string }>;
+    };
+
+    expect(Array.isArray(body.statePatch.analysisRows)).toBe(true);
+    expect(body.logs.length).toBeGreaterThan(0);
+    expect(body.logs.some((item) => item.stage === "prompt")).toBe(true);
+
+    await app.close();
+  });
 });
