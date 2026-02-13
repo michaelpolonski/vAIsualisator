@@ -7,13 +7,17 @@ const SUPPORTED_MODEL_PROVIDERS: SupportedModelProvider[] = [
 ];
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<SupportedModelProvider, string> = {
-  openai: "gpt-5-mini",
+  openai: "gpt-5.2",
   anthropic: "claude-sonnet-4-0",
   mock: "mock-v1",
 };
 
 const MODEL_PRESETS_BY_PROVIDER: Record<SupportedModelProvider, string[]> = {
   openai: [
+    "gpt-5.2",
+    "gpt-5.2-pro",
+    "gpt-5.1",
+    "gpt-5.1-codex-mini",
     "gpt-5-mini",
     "gpt-5",
     "gpt-5-nano",
