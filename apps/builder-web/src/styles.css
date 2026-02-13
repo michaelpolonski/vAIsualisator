@@ -280,6 +280,13 @@ pre {
   gap: 8px;
 }
 
+.validation-filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
 .validation-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -366,6 +373,10 @@ pre {
   background: #fffbeb;
 }
 
+.validation-item.muted {
+  opacity: 0.82;
+}
+
 .validation-code {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   color: #0f172a;
@@ -409,6 +420,36 @@ pre {
   padding: 3px 8px;
   font-size: 11px;
   cursor: pointer;
+}
+
+.muted-rules {
+  margin-top: 8px;
+}
+
+.muted-rule-list {
+  margin: 8px 0 0 0;
+  padding-left: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.muted-rule-item {
+  list-style: none;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px;
+  background: #ffffff;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.muted-rule-body {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #334155;
 }
 
 .event-node-list {
