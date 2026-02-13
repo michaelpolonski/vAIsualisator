@@ -506,6 +506,8 @@ export function App(): JSX.Element {
   const [previewOutput, setPreviewOutput] = useState<BuilderPreviewResponse | null>(null);
   const [previewStateDirty, setPreviewStateDirty] = useState(false);
   const [previewStateDraft, setPreviewStateDraft] = useState("{}");
+  const [allowPreviewProviderOverride, setAllowPreviewProviderOverride] =
+    useState(false);
   const [autosaveReady, setAutosaveReady] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
   const [providerStatusSummary, setProviderStatusSummary] = useState(
@@ -711,6 +713,35 @@ export function App(): JSX.Element {
         ? schema.events.find((event) => event.id === selectedPreviewEventId) ?? null
         : null,
     [schema.events, selectedPreviewEventId],
+  );
+
+  const selectedPreviewProvider = useMemo<SupportedModelProvider | null>(() => {
+    if (!selectedPreviewEvent) {
+      return null;
+    }
+    const promptNode = selectedPreviewEvent.actionGraph.nodes.find(
+      (node) => node.kind === "PromptTask",
+    );
+    if (!promptNode || promptNode.kind !== "PromptTask") {
+      return null;
+    }
+    return promptNode.promptSpec.modelPolicy.provider;
+  }, [selectedPreviewEvent]);
+
+  const selectedPreviewProviderStatus = useMemo(
+    () =>
+      selectedPreviewProvider && providerStatus
+        ? providerStatus[selectedPreviewProvider] ?? null
+        : null,
+    [providerStatus, selectedPreviewProvider],
+  );
+
+  const isPreviewBlockedByProvider = useMemo(
+    () =>
+      !allowPreviewProviderOverride &&
+      !!selectedPreviewProviderStatus &&
+      !selectedPreviewProviderStatus.available,
+    [allowPreviewProviderOverride, selectedPreviewProviderStatus],
   );
 
   const selectedSnapshot = useMemo(
@@ -1085,6 +1116,14 @@ export function App(): JSX.Element {
       return;
     }
 
+    if (isPreviewBlockedByProvider) {
+      setPreviewSummary(
+        `Preview blocked: provider '${selectedPreviewProvider}' is unavailable (${selectedPreviewProviderStatus?.reason ?? "missing provider credentials"}). Enable override to continue anyway.`,
+      );
+      setPreviewOutput(null);
+      return;
+    }
+
     setPreviewSummary(`Running preview for event '${selectedEventId}'...`);
     setPreviewOutput(null);
 
@@ -1106,7 +1145,14 @@ export function App(): JSX.Element {
       );
       setPreviewOutput(null);
     }
-  }, [selectedPreviewEventId, previewStateDraft, schema]);
+  }, [
+    isPreviewBlockedByProvider,
+    previewStateDraft,
+    schema,
+    selectedPreviewEventId,
+    selectedPreviewProvider,
+    selectedPreviewProviderStatus,
+  ]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -1163,7 +1209,12 @@ export function App(): JSX.Element {
           <h1>Form-First AI Builder</h1>
           <div className="header-actions">
             <button onClick={() => void compileNow()}>Run / Deploy (F5)</button>
-            <button onClick={() => void previewRuntime()}>Preview Runtime</button>
+            <button
+              onClick={() => void previewRuntime()}
+              disabled={isPreviewBlockedByProvider}
+            >
+              Preview Runtime
+            </button>
             <button onClick={() => void exportBundle()}>Export Bundle</button>
             <label className="import-label">
               Import Bundle
@@ -1317,6 +1368,29 @@ export function App(): JSX.Element {
           <p className="meta">
             Event: {selectedPreviewEventId ?? "none"} (select a button to target its event)
           </p>
+          {selectedPreviewProvider && (
+            <p className="meta">
+              Provider: <code>{selectedPreviewProvider}</code>{" "}
+              {selectedPreviewProviderStatus
+                ? selectedPreviewProviderStatus.available
+                  ? "(ready)"
+                  : `(unavailable: ${selectedPreviewProviderStatus.reason ?? "missing credentials"})`
+                : "(status unknown)"}
+            </p>
+          )}
+          <label className="meta inline-toggle">
+            <input
+              type="checkbox"
+              checked={allowPreviewProviderOverride}
+              onChange={(event) => setAllowPreviewProviderOverride(event.target.checked)}
+            />
+            Allow preview override when provider is unavailable
+          </label>
+          {isPreviewBlockedByProvider && (
+            <p className="warning-inline">
+              Preview is blocked until provider credentials are configured or override is enabled.
+            </p>
+          )}
           <textarea
             className="preview-state-input"
             value={previewStateDraft}
@@ -1327,7 +1401,12 @@ export function App(): JSX.Element {
             placeholder='{"customerComplaint":"The response was slow."}'
           />
           <div className="header-actions">
-            <button onClick={() => void previewRuntime()}>Run Preview</button>
+            <button
+              onClick={() => void previewRuntime()}
+              disabled={isPreviewBlockedByProvider}
+            >
+              Run Preview
+            </button>
             <button
               onClick={() => {
                 setPreviewStateDraft(defaultPreviewStateText);
