@@ -130,6 +130,9 @@ export function parseAndValidate(input: unknown): {
   const app = parsed.data;
   const componentIds = new Set<string>();
   const stateKeys = new Set(Object.keys(app.stateModel));
+  const uiStateKeyOwners = new Map<string, string>();
+  const triggerEventOwners = new Map<string, string>();
+  const eventIds = new Set<string>();
 
   for (const component of app.ui.components) {
     if (componentIds.has(component.id)) {
@@ -159,11 +162,58 @@ export function parseAndValidate(input: unknown): {
         message: `DataTable component '${component.id}' references missing state key '${component.dataKey}'.`,
       });
     }
+
+    if (component.type === "TextArea" || component.type === "DataTable") {
+      const uiStateKey =
+        component.type === "TextArea" ? component.stateKey : component.dataKey;
+      const owner = uiStateKeyOwners.get(uiStateKey);
+      if (owner && owner !== component.id) {
+        diagnostics.push({
+          code: "DUPLICATE_UI_STATE_KEY",
+          severity: "error",
+          path:
+            component.type === "TextArea"
+              ? `ui.components.${component.id}.stateKey`
+              : `ui.components.${component.id}.dataKey`,
+          message: `State key '${uiStateKey}' is used by both '${owner}' and '${component.id}'.`,
+        });
+      } else {
+        uiStateKeyOwners.set(uiStateKey, component.id);
+      }
+    }
+
+    if (component.type === "Button") {
+      const eventId = component.events.onClick;
+      if (!eventId) {
+        continue;
+      }
+      const owner = triggerEventOwners.get(eventId);
+      if (owner && owner !== component.id) {
+        diagnostics.push({
+          code: "DUPLICATE_TRIGGER_EVENT_ID",
+          severity: "error",
+          path: `ui.components.${component.id}.events.onClick`,
+          message: `Button event id '${eventId}' is used by both '${owner}' and '${component.id}'.`,
+        });
+      } else {
+        triggerEventOwners.set(eventId, component.id);
+      }
+    }
   }
 
   const aliases = buildAliasMap(app.ui.components);
 
   for (const event of app.events) {
+    if (eventIds.has(event.id)) {
+      diagnostics.push({
+        code: "DUPLICATE_EVENT_ID",
+        severity: "error",
+        path: `events.${event.id}`,
+        message: `Duplicate event id '${event.id}'.`,
+      });
+    }
+    eventIds.add(event.id);
+
     if (!componentIds.has(event.trigger.componentId)) {
       diagnostics.push({
         code: "UNKNOWN_TRIGGER_COMPONENT",

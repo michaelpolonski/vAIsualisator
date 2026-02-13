@@ -121,4 +121,52 @@ describe("AppCompiler", () => {
     expect(result.files).toHaveLength(0);
     expect(result.diagnostics.some((item) => item.code === "UNKNOWN_PROMPT_VARIABLE")).toBe(true);
   });
+
+  it("returns diagnostics for duplicate UI state keys", async () => {
+    const compiler = new AppCompiler();
+    const broken = {
+      ...validApp,
+      ui: {
+        ...validApp.ui,
+        components: validApp.ui.components.map((component) =>
+          component.id === "table_results" && component.type === "DataTable"
+            ? {
+                ...component,
+                dataKey: "customerComplaint",
+              }
+            : component,
+        ),
+      },
+    };
+
+    const result = await compiler.compile({
+      app: broken,
+      target: "node-fastify-react",
+    });
+
+    expect(result.files).toHaveLength(0);
+    expect(result.diagnostics.some((item) => item.code === "DUPLICATE_UI_STATE_KEY")).toBe(true);
+  });
+
+  it("returns diagnostics for duplicate event ids", async () => {
+    const compiler = new AppCompiler();
+    const broken = {
+      ...validApp,
+      events: [
+        validApp.events[0],
+        {
+          ...validApp.events[0],
+          trigger: { componentId: "btn_analyze", event: "onClick" as const },
+        },
+      ],
+    };
+
+    const result = await compiler.compile({
+      app: broken,
+      target: "node-fastify-react",
+    });
+
+    expect(result.files).toHaveLength(0);
+    expect(result.diagnostics.some((item) => item.code === "DUPLICATE_EVENT_ID")).toBe(true);
+  });
 });

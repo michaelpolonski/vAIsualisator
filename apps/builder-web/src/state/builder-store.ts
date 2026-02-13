@@ -75,6 +75,113 @@ function toStateKey(label: string): string {
     .join("");
 }
 
+function toDataKey(label: string): string {
+  return `${toStateKey(label)}Rows`;
+}
+
+function normalizeIdentifier(input: string, fallback: string): string {
+  const trimmed = input.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function nextUniqueIdentifier(args: {
+  preferred: string;
+  fallback: string;
+  used: Set<string>;
+  joiner: "" | "_";
+}): string {
+  const base = normalizeIdentifier(args.preferred, args.fallback);
+  if (!args.used.has(base)) {
+    return base;
+  }
+
+  let index = 2;
+  while (args.used.has(`${base}${args.joiner}${index}`)) {
+    index += 1;
+  }
+  return `${base}${args.joiner}${index}`;
+}
+
+function collectUsedStateModelKeys(args: {
+  components: BuilderComponent[];
+  excludeComponentId?: string;
+}): Set<string> {
+  const used = new Set<string>();
+  for (const component of args.components) {
+    if (component.id === args.excludeComponentId) {
+      continue;
+    }
+    if (component.type === "TextArea" && component.stateKey) {
+      used.add(component.stateKey);
+      continue;
+    }
+    if (component.type === "DataTable" && component.dataKey) {
+      used.add(component.dataKey);
+    }
+  }
+  return used;
+}
+
+function collectUsedEventIds(args: {
+  components: BuilderComponent[];
+  excludeComponentId?: string;
+}): Set<string> {
+  const used = new Set<string>();
+  for (const component of args.components) {
+    if (component.id === args.excludeComponentId || component.type !== "Button") {
+      continue;
+    }
+    if (component.eventId) {
+      used.add(component.eventId);
+    }
+  }
+  return used;
+}
+
+function ensureUniqueStateModelKey(args: {
+  components: BuilderComponent[];
+  preferred: string;
+  fallback: string;
+  excludeComponentId?: string;
+}): string {
+  const used = collectUsedStateModelKeys(
+    args.excludeComponentId
+      ? {
+          components: args.components,
+          excludeComponentId: args.excludeComponentId,
+        }
+      : { components: args.components },
+  );
+  return nextUniqueIdentifier({
+    preferred: args.preferred,
+    fallback: args.fallback,
+    used,
+    joiner: "",
+  });
+}
+
+function ensureUniqueEventId(args: {
+  components: BuilderComponent[];
+  preferred: string;
+  fallback: string;
+  excludeComponentId?: string;
+}): string {
+  const used = collectUsedEventIds(
+    args.excludeComponentId
+      ? {
+          components: args.components,
+          excludeComponentId: args.excludeComponentId,
+        }
+      : { components: args.components },
+  );
+  return nextUniqueIdentifier({
+    preferred: args.preferred,
+    fallback: args.fallback,
+    used,
+    joiner: "_",
+  });
+}
+
 function normalizeLookupKey(input: string): string {
   return input
     .trim()
@@ -187,6 +294,55 @@ function parseSnapshotConnection(value: unknown): BuilderConnection | null {
   };
 }
 
+function normalizeBuilderComponentIdentifiers(
+  components: BuilderComponent[],
+): BuilderComponent[] {
+  const usedStateModelKeys = new Set<string>();
+  const usedEventIds = new Set<string>();
+
+  return components.map((component) => {
+    if (component.type === "TextArea") {
+      const stateKey = nextUniqueIdentifier({
+        preferred: component.stateKey ?? toStateKey(component.label),
+        fallback: "fieldValue",
+        used: usedStateModelKeys,
+        joiner: "",
+      });
+      usedStateModelKeys.add(stateKey);
+      return {
+        ...component,
+        stateKey,
+      };
+    }
+
+    if (component.type === "DataTable") {
+      const dataKey = nextUniqueIdentifier({
+        preferred: component.dataKey ?? toDataKey(component.label),
+        fallback: "analysisRows",
+        used: usedStateModelKeys,
+        joiner: "",
+      });
+      usedStateModelKeys.add(dataKey);
+      return {
+        ...component,
+        dataKey,
+      };
+    }
+
+    const eventId = nextUniqueIdentifier({
+      preferred: component.eventId ?? `evt_${component.id}_click`,
+      fallback: `evt_${component.id}_click`,
+      used: usedEventIds,
+      joiner: "_",
+    });
+    usedEventIds.add(eventId);
+    return {
+      ...component,
+      eventId,
+    };
+  });
+}
+
 export function parseBuilderWorkspaceSnapshot(
   value: unknown,
 ): BuilderWorkspaceSnapshot | null {
@@ -212,7 +368,9 @@ export function parseBuilderWorkspaceSnapshot(
     return null;
   }
 
-  const componentIds = new Set(components.map((component) => component.id));
+  const normalizedComponents = normalizeBuilderComponentIdentifiers(components);
+
+  const componentIds = new Set(normalizedComponents.map((component) => component.id));
   const connections: BuilderConnection[] = [];
   for (const item of value.connections) {
     const parsed = parseSnapshotConnection(item);
@@ -224,7 +382,7 @@ export function parseBuilderWorkspaceSnapshot(
     }
     if (
       !canConnectComponents({
-        components,
+        components: normalizedComponents,
         sourceId: parsed.sourceId,
         targetId: parsed.targetId,
       })
@@ -237,7 +395,7 @@ export function parseBuilderWorkspaceSnapshot(
   return {
     appId: value.appId,
     version: value.version,
-    components,
+    components: normalizedComponents,
     connections: dedupeConnections(connections),
   };
 }
@@ -366,7 +524,7 @@ function buildBuilderFromAppDefinition(app: AppDefinition): {
   }
 
   return {
-    components,
+    components: normalizeBuilderComponentIdentifiers(components),
     connections: dedupeConnections(connections),
   };
 }
@@ -546,7 +704,11 @@ export const useBuilderStore = create<BuilderState>((set) => ({
             type,
             label,
             position: resolvedPosition,
-            stateKey: toStateKey(label),
+            stateKey: ensureUniqueStateModelKey({
+              components: state.components,
+              preferred: toStateKey(label),
+              fallback: "fieldValue",
+            }),
           },
         ],
       }));
@@ -562,7 +724,11 @@ export const useBuilderStore = create<BuilderState>((set) => ({
             type,
             label: `Button ${seq}`,
             position: resolvedPosition,
-            eventId: `evt_${idBase}_${seq}_click`,
+            eventId: ensureUniqueEventId({
+              components: state.components,
+              preferred: `evt_${idBase}_${seq}_click`,
+              fallback: `evt_${idBase}_${seq}_click`,
+            }),
             promptTemplate: "",
           },
         ],
@@ -578,7 +744,11 @@ export const useBuilderStore = create<BuilderState>((set) => ({
           type,
           label: `Table ${seq}`,
           position: resolvedPosition,
-          dataKey: `tableData${seq}`,
+          dataKey: ensureUniqueStateModelKey({
+            components: state.components,
+            preferred: `tableData${seq}`,
+            fallback: "analysisRows",
+          }),
         },
       ],
     }));
@@ -601,10 +771,48 @@ export const useBuilderStore = create<BuilderState>((set) => ({
 
         if (item.type === "TextArea") {
           const nextLabel = patch.label ?? item.label;
+          const wantsGeneratedStateKey =
+            patch.stateKey === undefined && patch.label !== undefined;
+          const preferredStateKey = wantsGeneratedStateKey
+            ? toStateKey(nextLabel)
+            : patch.stateKey ?? item.stateKey ?? toStateKey(nextLabel);
           return {
             ...item,
             ...patch,
-            stateKey: patch.stateKey ?? toStateKey(nextLabel),
+            stateKey: ensureUniqueStateModelKey({
+              components: state.components,
+              preferred: preferredStateKey,
+              fallback: "fieldValue",
+              excludeComponentId: item.id,
+            }),
+          };
+        }
+
+        if (item.type === "DataTable") {
+          const preferredDataKey = patch.dataKey ?? item.dataKey ?? toDataKey(item.label);
+          return {
+            ...item,
+            ...patch,
+            dataKey: ensureUniqueStateModelKey({
+              components: state.components,
+              preferred: preferredDataKey,
+              fallback: "analysisRows",
+              excludeComponentId: item.id,
+            }),
+          };
+        }
+
+        if (item.type === "Button") {
+          const preferredEventId = patch.eventId ?? item.eventId ?? `evt_${item.id}_click`;
+          return {
+            ...item,
+            ...patch,
+            eventId: ensureUniqueEventId({
+              components: state.components,
+              preferred: preferredEventId,
+              fallback: `evt_${item.id}_click`,
+              excludeComponentId: item.id,
+            }),
           };
         }
 
@@ -681,22 +889,26 @@ export const useBuilderStore = create<BuilderState>((set) => ({
     })),
   loadFromAppDefinition: (app) => {
     const next = buildBuilderFromAppDefinition(app);
-    seq = Math.max(seq, next.components.length);
+    const normalizedComponents = normalizeBuilderComponentIdentifiers(next.components);
+    seq = Math.max(seq, normalizedComponents.length);
     set({
       appId: app.appId,
       version: app.version,
-      components: next.components,
+      components: normalizedComponents,
       connections: next.connections,
       selectedComponentId: undefined,
       promptEditorFocusToken: 0,
     });
   },
   loadWorkspaceSnapshot: (snapshot) => {
-    seq = Math.max(seq, snapshot.components.length);
+    const normalizedComponents = normalizeBuilderComponentIdentifiers(
+      snapshot.components,
+    );
+    seq = Math.max(seq, normalizedComponents.length);
     set({
       appId: snapshot.appId,
       version: snapshot.version,
-      components: snapshot.components,
+      components: normalizedComponents,
       connections: snapshot.connections,
       selectedComponentId: undefined,
       promptEditorFocusToken: 0,
