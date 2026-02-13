@@ -24,6 +24,13 @@ export interface BuilderConnection {
   targetId: string;
 }
 
+export interface BuilderWorkspaceSnapshot {
+  appId: string;
+  version: string;
+  components: BuilderComponent[];
+  connections: BuilderConnection[];
+}
+
 interface BuilderState {
   appId: string;
   version: string;
@@ -39,6 +46,7 @@ interface BuilderState {
   addConnection: (sourceId: string, targetId: string) => void;
   removeConnection: (connectionId: string) => void;
   loadFromAppDefinition: (app: AppDefinition) => void;
+  loadWorkspaceSnapshot: (snapshot: BuilderWorkspaceSnapshot) => void;
 }
 
 let seq = 0;
@@ -95,6 +103,143 @@ function getComponentById(
   id: string,
 ): BuilderComponent | undefined {
   return components.find((component) => component.id === id);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isBuilderComponentType(value: unknown): value is BuilderComponentType {
+  return value === "TextArea" || value === "Button" || value === "DataTable";
+}
+
+function parseSnapshotComponent(value: unknown): BuilderComponent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.id !== "string" ||
+    !isBuilderComponentType(value.type) ||
+    typeof value.label !== "string" ||
+    !isRecord(value.position) ||
+    typeof value.position.x !== "number" ||
+    typeof value.position.y !== "number"
+  ) {
+    return null;
+  }
+
+  if (value.type === "TextArea") {
+    const stateKey =
+      typeof value.stateKey === "string" && value.stateKey.length > 0
+        ? value.stateKey
+        : toStateKey(value.label);
+    return {
+      id: value.id,
+      type: "TextArea",
+      label: value.label,
+      position: { x: value.position.x, y: value.position.y },
+      stateKey,
+    };
+  }
+
+  if (value.type === "Button") {
+    return {
+      id: value.id,
+      type: "Button",
+      label: value.label,
+      position: { x: value.position.x, y: value.position.y },
+      eventId:
+        typeof value.eventId === "string" && value.eventId.length > 0
+          ? value.eventId
+          : `evt_${value.id}_click`,
+      ...(typeof value.promptTemplate === "string"
+        ? { promptTemplate: value.promptTemplate }
+        : {}),
+    };
+  }
+
+  return {
+    id: value.id,
+    type: "DataTable",
+    label: value.label,
+    position: { x: value.position.x, y: value.position.y },
+    dataKey:
+      typeof value.dataKey === "string" && value.dataKey.length > 0
+        ? value.dataKey
+        : `${toStateKey(value.label)}Rows`,
+  };
+}
+
+function parseSnapshotConnection(value: unknown): BuilderConnection | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.sourceId !== "string" ||
+    typeof value.targetId !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    sourceId: value.sourceId,
+    targetId: value.targetId,
+  };
+}
+
+export function parseBuilderWorkspaceSnapshot(
+  value: unknown,
+): BuilderWorkspaceSnapshot | null {
+  if (
+    !isRecord(value) ||
+    typeof value.appId !== "string" ||
+    typeof value.version !== "string" ||
+    !Array.isArray(value.components) ||
+    !Array.isArray(value.connections)
+  ) {
+    return null;
+  }
+
+  const components: BuilderComponent[] = [];
+  for (const item of value.components) {
+    const parsed = parseSnapshotComponent(item);
+    if (!parsed) {
+      continue;
+    }
+    components.push(parsed);
+  }
+  if (components.length === 0) {
+    return null;
+  }
+
+  const componentIds = new Set(components.map((component) => component.id));
+  const connections: BuilderConnection[] = [];
+  for (const item of value.connections) {
+    const parsed = parseSnapshotConnection(item);
+    if (!parsed) {
+      continue;
+    }
+    if (!componentIds.has(parsed.sourceId) || !componentIds.has(parsed.targetId)) {
+      continue;
+    }
+    if (
+      !canConnectComponents({
+        components,
+        sourceId: parsed.sourceId,
+        targetId: parsed.targetId,
+      })
+    ) {
+      continue;
+    }
+    connections.push(parsed);
+  }
+
+  return {
+    appId: value.appId,
+    version: value.version,
+    components,
+    connections: dedupeConnections(connections),
+  };
 }
 
 function dedupeConnections(connections: BuilderConnection[]): BuilderConnection[] {
@@ -546,6 +691,17 @@ export const useBuilderStore = create<BuilderState>((set) => ({
       promptEditorFocusToken: 0,
     });
   },
+  loadWorkspaceSnapshot: (snapshot) => {
+    seq = Math.max(seq, snapshot.components.length);
+    set({
+      appId: snapshot.appId,
+      version: snapshot.version,
+      components: snapshot.components,
+      connections: snapshot.connections,
+      selectedComponentId: undefined,
+      promptEditorFocusToken: 0,
+    });
+  },
 }));
 
 export function getPromptVariables(buttonId?: string): string[] {
@@ -574,4 +730,14 @@ export function getPromptDiagnostics(buttonId: string): PromptDiagnostics {
 
 export function getStateSnapshot(): BuilderState {
   return useBuilderStore.getState();
+}
+
+export function getWorkspaceSnapshot(): BuilderWorkspaceSnapshot {
+  const state = getStateSnapshot();
+  return {
+    appId: state.appId,
+    version: state.version,
+    components: state.components,
+    connections: state.connections,
+  };
 }

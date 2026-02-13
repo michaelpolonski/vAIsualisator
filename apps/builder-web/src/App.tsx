@@ -11,7 +11,11 @@ import { AppDefinitionSchema, type AppDefinition } from "@form-builder/contracts
 import { Palette } from "./palette/Palette.js";
 import { Canvas } from "./canvas/Canvas.js";
 import { PromptEditor } from "./prompt-editor/PromptEditor.js";
-import { useBuilderStore, type BuilderComponentType } from "./state/builder-store.js";
+import {
+  parseBuilderWorkspaceSnapshot,
+  useBuilderStore,
+  type BuilderComponentType,
+} from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
 import "./styles.css";
 
@@ -45,6 +49,15 @@ interface BuilderPreviewResponse {
 }
 
 type CompileSource = "none" | "api" | "local";
+const AUTOSAVE_STORAGE_KEY = "form-first-builder.autosave.v1";
+
+interface PersistedAutosaveV1 {
+  kind: "form-first-builder-autosave-v1";
+  savedAt: string;
+  workspace: unknown;
+  previewStateDraft?: string;
+  previewStateDirty?: boolean;
+}
 
 function getClientPoint(event: Event): { x: number; y: number } | null {
   if (event instanceof MouseEvent || event instanceof PointerEvent) {
@@ -111,6 +124,33 @@ function parsePreviewStateDraft(input: string): Record<string, unknown> {
     throw new Error("Preview state must be a JSON object.");
   }
   return parsed as Record<string, unknown>;
+}
+
+function parseAutosave(value: unknown): PersistedAutosaveV1 | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.kind !== "form-first-builder-autosave-v1") {
+    return null;
+  }
+  if (typeof record.savedAt !== "string") {
+    return null;
+  }
+  if (!("workspace" in record)) {
+    return null;
+  }
+  return {
+    kind: "form-first-builder-autosave-v1",
+    savedAt: record.savedAt,
+    workspace: record.workspace,
+    ...(typeof record.previewStateDraft === "string"
+      ? { previewStateDraft: record.previewStateDraft }
+      : {}),
+    ...(typeof record.previewStateDirty === "boolean"
+      ? { previewStateDirty: record.previewStateDirty }
+      : {}),
+  };
 }
 
 function downloadJsonFile(filename: string, payload: unknown): void {
@@ -223,6 +263,9 @@ export function App(): JSX.Element {
   const loadFromAppDefinition = useBuilderStore(
     (state) => state.loadFromAppDefinition,
   );
+  const loadWorkspaceSnapshot = useBuilderStore(
+    (state) => state.loadWorkspaceSnapshot,
+  );
 
   const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
   const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
@@ -231,6 +274,8 @@ export function App(): JSX.Element {
   const [previewOutput, setPreviewOutput] = useState<BuilderPreviewResponse | null>(null);
   const [previewStateDirty, setPreviewStateDirty] = useState(false);
   const [previewStateDraft, setPreviewStateDraft] = useState("{}");
+  const [autosaveReady, setAutosaveReady] = useState(false);
+  const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -257,6 +302,43 @@ export function App(): JSX.Element {
     }
   }, [defaultPreviewStateText, previewStateDirty]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+      if (!raw) {
+        setAutosaveStatus("Autosave active (no prior snapshot).");
+        setAutosaveReady(true);
+        return;
+      }
+
+      const parsed = parseAutosave(JSON.parse(raw));
+      if (!parsed) {
+        setAutosaveStatus("Autosave data invalid; started fresh.");
+        setAutosaveReady(true);
+        return;
+      }
+
+      const workspace = parseBuilderWorkspaceSnapshot(parsed.workspace);
+      if (!workspace) {
+        setAutosaveStatus("Autosave workspace invalid; started fresh.");
+        setAutosaveReady(true);
+        return;
+      }
+
+      loadWorkspaceSnapshot(workspace);
+      if (parsed.previewStateDraft) {
+        setPreviewStateDraft(parsed.previewStateDraft);
+        setPreviewStateDirty(parsed.previewStateDirty ?? false);
+      }
+      setCompileSummary(`Restored autosave from ${parsed.savedAt}.`);
+      setAutosaveStatus(`Autosave restored (${parsed.savedAt}).`);
+      setAutosaveReady(true);
+    } catch {
+      setAutosaveStatus("Autosave load failed; started fresh.");
+      setAutosaveReady(true);
+    }
+  }, [loadWorkspaceSnapshot]);
+
   const selectedPreviewEventId = useMemo(() => {
     const selectedButton = components.find(
       (component) =>
@@ -264,6 +346,41 @@ export function App(): JSX.Element {
     );
     return selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
   }, [components, selectedComponentId, schema.events]);
+
+  useEffect(() => {
+    if (!autosaveReady) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const payload: PersistedAutosaveV1 = {
+        kind: "form-first-builder-autosave-v1",
+        savedAt: new Date().toISOString(),
+        workspace: {
+          appId,
+          version,
+          components,
+          connections,
+        },
+        previewStateDraft,
+        previewStateDirty,
+      };
+      localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(payload));
+      setAutosaveStatus(`Autosaved at ${payload.savedAt}`);
+    }, 200);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    autosaveReady,
+    appId,
+    version,
+    components,
+    connections,
+    previewStateDraft,
+    previewStateDirty,
+  ]);
 
   const compileNow = useCallback(async (): Promise<void> => {
     setCompileSummary("Compiling...");
@@ -531,8 +648,17 @@ export function App(): JSX.Element {
                 onChange={(event) => void importBundle(event)}
               />
             </label>
+            <button
+              onClick={() => {
+                localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+                setAutosaveStatus("Autosave cleared.");
+              }}
+            >
+              Clear Autosave
+            </button>
           </div>
         </header>
+        <p className="meta">{autosaveStatus}</p>
 
         <section className="workspace">
           <Palette />
