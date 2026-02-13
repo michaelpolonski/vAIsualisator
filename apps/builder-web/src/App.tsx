@@ -122,6 +122,13 @@ function buildValidationSummary(diagnostics: CompileDiagnostic[]): string {
   return `${errorCount} error(s), ${warningCount} warning(s).`;
 }
 
+function isPromptDiagnostic(path?: string): boolean {
+  if (!path) {
+    return false;
+  }
+  return path.includes(".promptSpec.");
+}
+
 function createFileMetas(files: CompileFileContent[]): CompileFileMeta[] {
   return files.map((file) => ({
     path: file.path,
@@ -421,6 +428,8 @@ export function App(): JSX.Element {
   const connections = useBuilderStore((state) => state.connections);
   const selectedComponentId = useBuilderStore((state) => state.selectedComponentId);
   const addComponent = useBuilderStore((state) => state.addComponent);
+  const selectComponent = useBuilderStore((state) => state.selectComponent);
+  const focusPromptEditor = useBuilderStore((state) => state.focusPromptEditor);
   const loadFromAppDefinition = useBuilderStore(
     (state) => state.loadFromAppDefinition,
   );
@@ -593,6 +602,90 @@ export function App(): JSX.Element {
           })
         : null,
     [currentWorkspace, selectedSnapshot],
+  );
+
+  const componentById = useMemo(
+    () => new Map(components.map((component) => [component.id, component])),
+    [components],
+  );
+
+  const eventToComponentId = useMemo(
+    () =>
+      new Map(
+        schema.events.map((event) => [event.id, event.trigger.componentId] as const),
+      ),
+    [schema.events],
+  );
+
+  const resolveDiagnosticTarget = useCallback(
+    (
+      diagnostic: CompileDiagnostic,
+    ): { componentId: string; openPromptEditor: boolean } | null => {
+      const path = diagnostic.path;
+      if (!path) {
+        return null;
+      }
+
+      const segments = path.split(".");
+      if (segments.length < 3) {
+        return null;
+      }
+
+      if (segments[0] === "ui" && segments[1] === "components") {
+        const componentId = segments[2];
+        if (!componentId) {
+          return null;
+        }
+        const component = componentById.get(componentId);
+        if (!component) {
+          return null;
+        }
+        return { componentId, openPromptEditor: false };
+      }
+
+      if (segments[0] === "events" && segments[1]) {
+        const eventId = segments[1];
+        if (!eventId) {
+          return null;
+        }
+        const componentId = eventToComponentId.get(eventId);
+        if (!componentId) {
+          return null;
+        }
+        const component = componentById.get(componentId);
+        if (!component) {
+          return null;
+        }
+        return {
+          componentId,
+          openPromptEditor: component.type === "Button" && isPromptDiagnostic(path),
+        };
+      }
+
+      return null;
+    },
+    [componentById, eventToComponentId],
+  );
+
+  const navigateToDiagnostic = useCallback(
+    (diagnostic: CompileDiagnostic): void => {
+      const target = resolveDiagnosticTarget(diagnostic);
+      if (!target) {
+        return;
+      }
+
+      if (target.openPromptEditor) {
+        focusPromptEditor(target.componentId);
+      } else {
+        selectComponent(target.componentId);
+      }
+
+      canvasElement?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    },
+    [canvasElement, focusPromptEditor, resolveDiagnosticTarget, selectComponent],
   );
 
   useEffect(() => {
@@ -982,20 +1075,37 @@ export function App(): JSX.Element {
           )}
           {validationDiagnostics.length > 0 && (
             <ul className="validation-list">
-              {validationDiagnostics.map((diagnostic, index) => (
-                <li
-                  key={`${diagnostic.code}-${diagnostic.message}-${index}`}
-                  className={`validation-item ${diagnostic.severity}`}
-                >
-                  <code className="validation-code">
-                    {diagnostic.severity.toUpperCase()} {diagnostic.code}
-                  </code>
-                  <span>{diagnostic.message}</span>
-                  {diagnostic.path && (
-                    <code className="validation-path">{diagnostic.path}</code>
-                  )}
-                </li>
-              ))}
+              {validationDiagnostics.map((diagnostic, index) => {
+                const target = resolveDiagnosticTarget(diagnostic);
+                return (
+                  <li
+                    key={`${diagnostic.code}-${diagnostic.message}-${index}`}
+                    className={`validation-item ${diagnostic.severity}`}
+                  >
+                    <div className="validation-header-row">
+                      <code className="validation-code">
+                        {diagnostic.severity.toUpperCase()} {diagnostic.code}
+                      </code>
+                      <button
+                        className="validation-nav"
+                        onClick={() => navigateToDiagnostic(diagnostic)}
+                        disabled={!target}
+                      >
+                        Go to Canvas
+                      </button>
+                    </div>
+                    <span>{diagnostic.message}</span>
+                    {diagnostic.path && (
+                      <code className="validation-path">{diagnostic.path}</code>
+                    )}
+                    {target && (
+                      <div className="meta">
+                        Target component: <code>{target.componentId}</code>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

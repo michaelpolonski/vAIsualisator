@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import {
   MarkerType,
@@ -11,6 +11,7 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from "reactflow";
 import {
   canConnectComponents,
@@ -88,6 +89,7 @@ export function Canvas(props: {
   const connections = useBuilderStore((state) => state.connections);
   const addConnection = useBuilderStore((state) => state.addConnection);
   const removeConnection = useBuilderStore((state) => state.removeConnection);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
 
   const { setNodeRef, isOver } = useDroppable({ id: "builder-canvas" });
 
@@ -173,11 +175,28 @@ export function Canvas(props: {
     [components],
   );
 
+  useEffect(() => {
+    if (!flowInstance || !selectedId) {
+      return;
+    }
+
+    const selected = components.find((component) => component.id === selectedId);
+    if (!selected) {
+      return;
+    }
+
+    flowInstance.setCenter(selected.position.x + 120, selected.position.y + 40, {
+      zoom: Math.max(flowInstance.getZoom(), 0.9),
+      duration: 280,
+    });
+  }, [components, flowInstance, selectedId]);
+
   return (
     <section ref={setCanvasRef} className={`panel canvas ${isOver ? "canvas-drop-over" : ""}`}>
       <h2>Canvas</h2>
       <div className="canvas-flow-wrap">
         <ReactFlow
+          onInit={setFlowInstance}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}

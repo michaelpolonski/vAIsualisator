@@ -236,6 +236,13 @@ pre {
   font-size: 12px;
 }
 
+.validation-header-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
 .validation-item.error {
   border-color: #fca5a5;
   background: #fef2f2;
@@ -254,6 +261,21 @@ pre {
 .validation-path {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   color: #475569;
+}
+
+.validation-nav {
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.validation-nav:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .snapshot-list {
