@@ -75,6 +75,11 @@ interface DiagnosticFixAction {
   apply: () => void;
 }
 
+interface DiagnosticFixCandidate {
+  key: string;
+  fix: DiagnosticFixAction;
+}
+
 interface LastFixUndoState {
   label: string;
   workspace: BuilderWorkspaceSnapshot;
@@ -86,6 +91,18 @@ function extractBracedVariableToken(message: string): string | null {
   const match = message.match(/{{\s*([^}]+?)\s*}}/);
   const token = match?.[1]?.trim();
   return token && token.length > 0 ? token : null;
+}
+
+function buildDiagnosticFixKey(args: {
+  diagnostic: CompileDiagnostic;
+  fixLabel: string;
+}): string {
+  return [
+    args.diagnostic.code,
+    args.diagnostic.path ?? "",
+    args.diagnostic.message,
+    args.fixLabel,
+  ].join("::");
 }
 
 function buildBuilderGuardrailDiagnostics(args: {
@@ -1040,6 +1057,31 @@ export function App(): JSX.Element {
     [addConnection, componentById, components, updateComponent],
   );
 
+  const availableValidationFixes = useMemo<DiagnosticFixCandidate[]>(() => {
+    const seen = new Set<string>();
+    const fixes: DiagnosticFixCandidate[] = [];
+
+    for (const diagnostic of validationDiagnostics) {
+      const target = resolveDiagnosticTarget(diagnostic);
+      const fix = resolveDiagnosticFix(diagnostic, target);
+      if (!fix) {
+        continue;
+      }
+
+      const key = buildDiagnosticFixKey({
+        diagnostic,
+        fixLabel: fix.label,
+      });
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      fixes.push({ key, fix });
+    }
+
+    return fixes;
+  }, [resolveDiagnosticFix, resolveDiagnosticTarget, validationDiagnostics]);
+
   const applyFixWithUndo = useCallback(
     (fix: DiagnosticFixAction): void => {
       setLastFixUndoState({
@@ -1053,6 +1095,33 @@ export function App(): JSX.Element {
     },
     [currentWorkspace, previewStateDraft, previewStateDirty],
   );
+
+  const applyAllValidationFixes = useCallback((): void => {
+    if (availableValidationFixes.length === 0) {
+      setValidationFixStatus("No automatic fixes available.");
+      return;
+    }
+
+    setLastFixUndoState({
+      label: `Apply all fixes (${availableValidationFixes.length})`,
+      workspace: currentWorkspace,
+      previewStateDraft,
+      previewStateDirty,
+    });
+
+    for (const item of availableValidationFixes) {
+      item.fix.apply();
+    }
+
+    setValidationFixStatus(
+      `Applied ${availableValidationFixes.length} fix(es).`,
+    );
+  }, [
+    availableValidationFixes,
+    currentWorkspace,
+    previewStateDraft,
+    previewStateDirty,
+  ]);
 
   const undoLastFix = useCallback((): void => {
     if (!lastFixUndoState) {
@@ -1530,6 +1599,13 @@ export function App(): JSX.Element {
         <section className="panel">
           <h2>Live Validation</h2>
           <div className="validation-toolbar">
+            <button
+              className="validation-apply-all"
+              onClick={applyAllValidationFixes}
+              disabled={availableValidationFixes.length === 0}
+            >
+              Apply All Fixes ({availableValidationFixes.length})
+            </button>
             <button
               className="validation-undo"
               onClick={undoLastFix}

@@ -283,7 +283,23 @@ pre {
 .validation-toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-bottom: 8px;
+}
+
+.validation-apply-all {
+  border: 1px solid #0284c7;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.validation-apply-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .validation-undo {
