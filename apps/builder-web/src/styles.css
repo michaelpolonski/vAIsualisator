@@ -237,6 +237,11 @@ pre {
   background: #ffffff;
 }
 
+.snapshot-item.active {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.18);
+}
+
 .snapshot-meta {
   font-size: 12px;
   color: #334155;
@@ -245,6 +250,25 @@ pre {
 .snapshot-actions {
   display: flex;
   gap: 6px;
+}
+
+.diff-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.diff-card {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.diff-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 6px;
 }
 
 @media (max-width: 1024px) {

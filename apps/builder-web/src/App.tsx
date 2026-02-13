@@ -75,6 +75,16 @@ interface PersistedSnapshotHistoryV1 {
   entries: SnapshotEntry[];
 }
 
+interface SnapshotDiff {
+  appMetaChanged: boolean;
+  versionChanged: boolean;
+  addedComponents: string[];
+  removedComponents: string[];
+  changedComponents: string[];
+  addedConnections: string[];
+  removedConnections: string[];
+}
+
 function getClientPoint(event: Event): { x: number; y: number } | null {
   if (event instanceof MouseEvent || event instanceof PointerEvent) {
     return { x: event.clientX, y: event.clientY };
@@ -212,6 +222,87 @@ function parseSnapshotHistory(value: unknown): SnapshotEntry[] | null {
   return entries;
 }
 
+function componentSignature(component: BuilderWorkspaceSnapshot["components"][number]): string {
+  const base = {
+    type: component.type,
+    label: component.label,
+    position: component.position,
+  };
+
+  if (component.type === "TextArea") {
+    return JSON.stringify({
+      ...base,
+      stateKey: component.stateKey ?? "",
+    });
+  }
+
+  if (component.type === "Button") {
+    return JSON.stringify({
+      ...base,
+      eventId: component.eventId ?? "",
+      promptTemplate: component.promptTemplate ?? "",
+    });
+  }
+
+  return JSON.stringify({
+    ...base,
+    dataKey: component.dataKey ?? "",
+  });
+}
+
+function diffSnapshot(args: {
+  current: BuilderWorkspaceSnapshot;
+  snapshot: BuilderWorkspaceSnapshot;
+}): SnapshotDiff {
+  const currentComponents = new Map(
+    args.current.components.map((component) => [component.id, component]),
+  );
+  const snapshotComponents = new Map(
+    args.snapshot.components.map((component) => [component.id, component]),
+  );
+
+  const addedComponents = [...snapshotComponents.keys()].filter(
+    (id) => !currentComponents.has(id),
+  );
+  const removedComponents = [...currentComponents.keys()].filter(
+    (id) => !snapshotComponents.has(id),
+  );
+  const changedComponents = [...currentComponents.keys()].filter((id) => {
+    const currentComponent = currentComponents.get(id);
+    const snapshotComponent = snapshotComponents.get(id);
+    if (!currentComponent || !snapshotComponent) {
+      return false;
+    }
+    return componentSignature(currentComponent) !== componentSignature(snapshotComponent);
+  });
+
+  const currentConnections = new Set(
+    args.current.connections.map((connection) => `${connection.sourceId} -> ${connection.targetId}`),
+  );
+  const snapshotConnections = new Set(
+    args.snapshot.connections.map(
+      (connection) => `${connection.sourceId} -> ${connection.targetId}`,
+    ),
+  );
+
+  const addedConnections = [...snapshotConnections].filter(
+    (key) => !currentConnections.has(key),
+  );
+  const removedConnections = [...currentConnections].filter(
+    (key) => !snapshotConnections.has(key),
+  );
+
+  return {
+    appMetaChanged: args.current.appId !== args.snapshot.appId,
+    versionChanged: args.current.version !== args.snapshot.version,
+    addedComponents,
+    removedComponents,
+    changedComponents,
+    addedConnections,
+    removedConnections,
+  };
+}
+
 function downloadJsonFile(filename: string, payload: unknown): void {
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -336,6 +427,7 @@ export function App(): JSX.Element {
   const [autosaveReady, setAutosaveReady] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
   const [snapshotHistory, setSnapshotHistory] = useState<SnapshotEntry[]>([]);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -413,15 +505,19 @@ export function App(): JSX.Element {
     try {
       const raw = localStorage.getItem(SNAPSHOT_HISTORY_STORAGE_KEY);
       if (!raw) {
+        setSelectedSnapshotId(null);
         return;
       }
       const entries = parseSnapshotHistory(JSON.parse(raw));
       if (!entries) {
+        setSelectedSnapshotId(null);
         return;
       }
       setSnapshotHistory(entries);
+      setSelectedSnapshotId(entries[0]?.id ?? null);
     } catch {
       setSnapshotHistory([]);
+      setSelectedSnapshotId(null);
     }
   }, []);
 
@@ -432,6 +528,22 @@ export function App(): JSX.Element {
     );
     return selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
   }, [components, selectedComponentId, schema.events]);
+
+  const selectedSnapshot = useMemo(
+    () => snapshotHistory.find((entry) => entry.id === selectedSnapshotId) ?? null,
+    [snapshotHistory, selectedSnapshotId],
+  );
+
+  const selectedSnapshotDiff = useMemo(
+    () =>
+      selectedSnapshot
+        ? diffSnapshot({
+            current: currentWorkspace,
+            snapshot: selectedSnapshot.workspace,
+          })
+        : null,
+    [currentWorkspace, selectedSnapshot],
+  );
 
   useEffect(() => {
     if (!autosaveReady) {
@@ -482,6 +594,7 @@ export function App(): JSX.Element {
       persistSnapshotHistory(next);
       return next;
     });
+    setSelectedSnapshotId(nextEntry.id);
     setAutosaveStatus(`Snapshot saved at ${nextEntry.savedAt}`);
   }, [currentWorkspace, previewStateDraft, previewStateDirty, persistSnapshotHistory]);
 
@@ -503,14 +616,18 @@ export function App(): JSX.Element {
       setSnapshotHistory((prev) => {
         const next = prev.filter((entry) => entry.id !== id);
         persistSnapshotHistory(next);
+        if (selectedSnapshotId === id) {
+          setSelectedSnapshotId(next[0]?.id ?? null);
+        }
         return next;
       });
     },
-    [persistSnapshotHistory],
+    [persistSnapshotHistory, selectedSnapshotId],
   );
 
   const clearSnapshotHistory = useCallback((): void => {
     setSnapshotHistory([]);
+    setSelectedSnapshotId(null);
     localStorage.removeItem(SNAPSHOT_HISTORY_STORAGE_KEY);
   }, []);
 
@@ -856,17 +973,84 @@ export function App(): JSX.Element {
           ) : (
             <ul className="snapshot-list">
               {snapshotHistory.map((entry) => (
-                <li key={entry.id} className="snapshot-item">
+                <li
+                  key={entry.id}
+                  className={`snapshot-item ${
+                    selectedSnapshotId === entry.id ? "active" : ""
+                  }`}
+                >
                   <div className="snapshot-meta">
                     <code>{entry.savedAt}</code>
                   </div>
                   <div className="snapshot-actions">
+                    <button onClick={() => setSelectedSnapshotId(entry.id)}>View Diff</button>
                     <button onClick={() => restoreSnapshot(entry)}>Restore</button>
                     <button onClick={() => deleteSnapshot(entry.id)}>Delete</button>
                   </div>
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Snapshot Diff</h2>
+          {!selectedSnapshot || !selectedSnapshotDiff ? (
+            <p className="meta">Select a snapshot to view diff.</p>
+          ) : (
+            <div className="diff-grid">
+              <div className="diff-card">
+                <div className="diff-title">Metadata</div>
+                <div className="meta">
+                  appId changed: {selectedSnapshotDiff.appMetaChanged ? "yes" : "no"}
+                </div>
+                <div className="meta">
+                  version changed: {selectedSnapshotDiff.versionChanged ? "yes" : "no"}
+                </div>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Components</div>
+                <div className="meta">
+                  added: {selectedSnapshotDiff.addedComponents.length}
+                </div>
+                <div className="meta">
+                  removed: {selectedSnapshotDiff.removedComponents.length}
+                </div>
+                <div className="meta">
+                  changed: {selectedSnapshotDiff.changedComponents.length}
+                </div>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Connections</div>
+                <div className="meta">
+                  added: {selectedSnapshotDiff.addedConnections.length}
+                </div>
+                <div className="meta">
+                  removed: {selectedSnapshotDiff.removedConnections.length}
+                </div>
+              </div>
+
+              <div className="diff-card">
+                <div className="diff-title">Added Components</div>
+                <pre>{selectedSnapshotDiff.addedComponents.join("\n") || "(none)"}</pre>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Removed Components</div>
+                <pre>{selectedSnapshotDiff.removedComponents.join("\n") || "(none)"}</pre>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Changed Components</div>
+                <pre>{selectedSnapshotDiff.changedComponents.join("\n") || "(none)"}</pre>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Added Connections</div>
+                <pre>{selectedSnapshotDiff.addedConnections.join("\n") || "(none)"}</pre>
+              </div>
+              <div className="diff-card">
+                <div className="diff-title">Removed Connections</div>
+                <pre>{selectedSnapshotDiff.removedConnections.join("\n") || "(none)"}</pre>
+              </div>
+            </div>
           )}
         </section>
       </main>
