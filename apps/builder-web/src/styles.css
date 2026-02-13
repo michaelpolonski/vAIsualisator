@@ -218,6 +218,44 @@ pre {
   font-size: 12px;
 }
 
+.validation-list {
+  margin: 8px 0 0 0;
+  padding-left: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.validation-item {
+  list-style: none;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.validation-item.error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.validation-item.warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.validation-code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  color: #0f172a;
+}
+
+.validation-path {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  color: #475569;
+}
+
 .snapshot-list {
   margin: 0;
   padding-left: 0;

@@ -24,6 +24,7 @@ interface CompileDiagnostic {
   code: string;
   message: string;
   severity: "error" | "warning";
+  path?: string;
 }
 
 interface CompileFileMeta {
@@ -109,6 +110,16 @@ function formatDiagnostics(diagnostics: CompileDiagnostic[]): string {
   return diagnostics
     .map((item) => `${item.severity.toUpperCase()} ${item.code}: ${item.message}`)
     .join("\n");
+}
+
+function buildValidationSummary(diagnostics: CompileDiagnostic[]): string {
+  if (diagnostics.length === 0) {
+    return "No validation issues.";
+  }
+
+  const errorCount = diagnostics.filter((item) => item.severity === "error").length;
+  const warningCount = diagnostics.filter((item) => item.severity === "warning").length;
+  return `${errorCount} error(s), ${warningCount} warning(s).`;
 }
 
 function createFileMetas(files: CompileFileContent[]): CompileFileMeta[] {
@@ -420,6 +431,13 @@ export function App(): JSX.Element {
   const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
   const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
   const [compileSource, setCompileSource] = useState<CompileSource>("none");
+  const [validationSummary, setValidationSummary] = useState("Validation pending.");
+  const [validationDiagnostics, setValidationDiagnostics] = useState<
+    CompileDiagnostic[]
+  >([]);
+  const [validationCheckedAtMs, setValidationCheckedAtMs] = useState<number | null>(
+    null,
+  );
   const [previewSummary, setPreviewSummary] = useState("No preview run yet.");
   const [previewOutput, setPreviewOutput] = useState<BuilderPreviewResponse | null>(null);
   const [previewStateDirty, setPreviewStateDirty] = useState(false);
@@ -463,6 +481,38 @@ export function App(): JSX.Element {
       setPreviewStateDraft(defaultPreviewStateText);
     }
   }, [defaultPreviewStateText, previewStateDirty]);
+
+  useEffect(() => {
+    let canceled = false;
+    const timer = window.setTimeout(() => {
+      setValidationSummary("Validating...");
+      void (async () => {
+        try {
+          const result = await compileLocally({ app: schema });
+          if (canceled) {
+            return;
+          }
+          setValidationDiagnostics(result.diagnostics);
+          setValidationSummary(buildValidationSummary(result.diagnostics));
+          setValidationCheckedAtMs(Date.now());
+        } catch (error) {
+          if (canceled) {
+            return;
+          }
+          setValidationDiagnostics([]);
+          setValidationSummary(
+            `Validation failed: ${(error as Error).message}`,
+          );
+          setValidationCheckedAtMs(Date.now());
+        }
+      })();
+    }, 250);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [schema]);
 
   useEffect(() => {
     try {
@@ -920,6 +970,34 @@ export function App(): JSX.Element {
         <section className="panel">
           <h2>Current App Schema</h2>
           <pre>{JSON.stringify(schema, null, 2)}</pre>
+        </section>
+
+        <section className="panel">
+          <h2>Live Validation</h2>
+          <p className="meta">{validationSummary}</p>
+          {validationCheckedAtMs && (
+            <p className="meta">
+              Last checked: {new Date(validationCheckedAtMs).toLocaleTimeString()}
+            </p>
+          )}
+          {validationDiagnostics.length > 0 && (
+            <ul className="validation-list">
+              {validationDiagnostics.map((diagnostic, index) => (
+                <li
+                  key={`${diagnostic.code}-${diagnostic.message}-${index}`}
+                  className={`validation-item ${diagnostic.severity}`}
+                >
+                  <code className="validation-code">
+                    {diagnostic.severity.toUpperCase()} {diagnostic.code}
+                  </code>
+                  <span>{diagnostic.message}</span>
+                  {diagnostic.path && (
+                    <code className="validation-path">{diagnostic.path}</code>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="panel">
