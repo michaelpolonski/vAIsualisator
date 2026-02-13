@@ -14,6 +14,7 @@ import {
 } from "reactflow";
 import {
   canConnectComponents,
+  getPromptDiagnosticsForButton,
   useBuilderStore,
   type BuilderComponent,
 } from "../state/builder-store.js";
@@ -22,7 +23,9 @@ import "reactflow/dist/style.css";
 interface BuilderNodeData {
   component: BuilderComponent;
   selected: boolean;
+  promptWarningCount: number;
   onSelect: (id: string) => void;
+  onOpenPromptEditor: (id: string) => void;
   onUpdateLabel: (id: string, label: string) => void;
 }
 
@@ -33,6 +36,11 @@ function BuilderNode({ data }: NodeProps<BuilderNodeData>): JSX.Element {
     <div
       className={`flow-node ${data.selected ? "selected" : ""}`}
       onClick={() => data.onSelect(component.id)}
+      onDoubleClick={() => {
+        if (component.type === "Button") {
+          data.onOpenPromptEditor(component.id);
+        }
+      }}
     >
       {(component.type === "Button" || component.type === "DataTable") && (
         <Handle type="target" position={Position.Left} />
@@ -45,7 +53,17 @@ function BuilderNode({ data }: NodeProps<BuilderNodeData>): JSX.Element {
         onClick={(event) => event.stopPropagation()}
       />
       {component.type === "TextArea" && <div className="meta">state: {component.stateKey}</div>}
-      {component.type === "Button" && <div className="meta">event: {component.eventId}</div>}
+      {component.type === "Button" && (
+        <>
+          <div className="meta">event: {component.eventId}</div>
+          <div className="meta">double-click to edit prompt</div>
+          {data.promptWarningCount > 0 && (
+            <div className="node-warning">
+              {data.promptWarningCount} prompt issue{data.promptWarningCount > 1 ? "s" : ""}
+            </div>
+          )}
+        </>
+      )}
       {component.type === "DataTable" && <div className="meta">data: {component.dataKey}</div>}
       {(component.type === "Button" || component.type === "TextArea") && (
         <Handle type="source" position={Position.Right} />
@@ -66,6 +84,7 @@ export function Canvas(props: {
   const selectComponent = useBuilderStore((state) => state.selectComponent);
   const updateComponent = useBuilderStore((state) => state.updateComponent);
   const moveComponent = useBuilderStore((state) => state.moveComponent);
+  const focusPromptEditor = useBuilderStore((state) => state.focusPromptEditor);
   const connections = useBuilderStore((state) => state.connections);
   const addConnection = useBuilderStore((state) => state.addConnection);
   const removeConnection = useBuilderStore((state) => state.removeConnection);
@@ -88,18 +107,41 @@ export function Canvas(props: {
 
   const nodes: Array<Node<BuilderNodeData>> = useMemo(
     () =>
-      components.map((component) => ({
-        id: component.id,
-        type: "builderNode",
-        position: component.position,
-        data: {
-          component,
-          selected: selectedId === component.id,
-          onSelect: (id: string) => selectComponent(id),
-          onUpdateLabel: (id: string, label: string) => updateComponent(id, { label }),
-        },
-      })),
-    [components, selectedId, selectComponent, updateComponent],
+      components.map((component) => {
+        const promptDiagnostics =
+          component.type === "Button"
+            ? getPromptDiagnosticsForButton({
+                components,
+                connections,
+                buttonId: component.id,
+              })
+            : undefined;
+
+        return {
+          id: component.id,
+          type: "builderNode",
+          position: component.position,
+          data: {
+            component,
+            selected: selectedId === component.id,
+            promptWarningCount: promptDiagnostics
+              ? promptDiagnostics.unknownVariables.length +
+                promptDiagnostics.disconnectedVariables.length
+              : 0,
+            onSelect: (id: string) => selectComponent(id),
+            onOpenPromptEditor: (id: string) => focusPromptEditor(id),
+            onUpdateLabel: (id: string, label: string) => updateComponent(id, { label }),
+          },
+        };
+      }),
+    [
+      components,
+      connections,
+      selectedId,
+      selectComponent,
+      focusPromptEditor,
+      updateComponent,
+    ],
   );
 
   const edges: Array<Edge> = useMemo(

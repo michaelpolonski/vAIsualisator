@@ -93,6 +93,15 @@ body {
   box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2);
 }
 
+.node-warning {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
 .node-label-input {
   width: 100%;
   border: 1px solid #cbd5e1;
@@ -132,6 +141,33 @@ body {
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 12px;
+}
+
+.warning-chip {
+  border-color: #f59e0b;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.warning-box {
+  margin-top: 10px;
+  border: 1px solid #fbbf24;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.warning-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  margin-bottom: 4px;
+}
+
+.warning-text {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: #92400e;
 }
 
 pre {

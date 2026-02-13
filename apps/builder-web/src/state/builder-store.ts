@@ -29,8 +29,10 @@ interface BuilderState {
   components: BuilderComponent[];
   connections: BuilderConnection[];
   selectedComponentId: string | undefined;
+  promptEditorFocusToken: number;
   addComponent: (type: BuilderComponentType, position?: BuilderPosition) => void;
   selectComponent: (id?: string) => void;
+  focusPromptEditor: (buttonId: string) => void;
   updateComponent: (id: string, patch: Partial<BuilderComponent>) => void;
   moveComponent: (id: string, position: BuilderPosition) => void;
   addConnection: (sourceId: string, targetId: string) => void;
@@ -40,6 +42,7 @@ interface BuilderState {
 let seq = 0;
 const GRID_X = 320;
 const GRID_Y = 120;
+const PROMPT_VAR_REGEX = /{{\s*([^}]+?)\s*}}/g;
 
 function toStateKey(label: string): string {
   const tokens = label
@@ -60,6 +63,22 @@ function toStateKey(label: string): string {
       return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
     })
     .join("");
+}
+
+function normalizeLookupKey(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, "");
+}
+
+function getStateKeysFromComponents(components: BuilderComponent[]): string[] {
+  return components
+    .filter((component) => component.type === "TextArea")
+    .map((component) => component.stateKey ?? "")
+    .filter(Boolean);
 }
 
 function nextPosition(index: number): BuilderPosition {
@@ -102,10 +121,104 @@ export function canConnectComponents(args: {
   return false;
 }
 
+function resolveConnectedInputKeys(args: {
+  components: BuilderComponent[];
+  connections: BuilderConnection[];
+  buttonId: string;
+}): string[] {
+  const allInputKeys = getStateKeysFromComponents(args.components);
+
+  const connectedInputKeys = args.connections
+    .filter((connection) => connection.targetId === args.buttonId)
+    .map((connection) => getComponentById(args.components, connection.sourceId))
+    .filter((component): component is BuilderComponent => !!component)
+    .filter((component) => component.type === "TextArea")
+    .map((component) => component.stateKey ?? "")
+    .filter(Boolean);
+
+  return connectedInputKeys.length > 0 ? connectedInputKeys : allInputKeys;
+}
+
+function buildPromptAliasMap(components: BuilderComponent[]): Map<string, string> {
+  const aliasMap = new Map<string, string>();
+
+  for (const component of components) {
+    if (component.type !== "TextArea" || !component.stateKey) {
+      continue;
+    }
+
+    aliasMap.set(component.stateKey, component.stateKey);
+    aliasMap.set(component.label, component.stateKey);
+    aliasMap.set(normalizeLookupKey(component.stateKey), component.stateKey);
+    aliasMap.set(normalizeLookupKey(component.label), component.stateKey);
+  }
+
+  return aliasMap;
+}
+
+function extractTemplateVariables(template: string): string[] {
+  const variables: string[] = [];
+  for (const match of template.matchAll(PROMPT_VAR_REGEX)) {
+    const raw = match[1]?.trim();
+    if (raw) {
+      variables.push(raw);
+    }
+  }
+  return variables;
+}
+
+export interface PromptDiagnostics {
+  templateVariables: string[];
+  unknownVariables: string[];
+  disconnectedVariables: string[];
+  availableVariables: string[];
+}
+
+export function getPromptDiagnosticsForButton(args: {
+  components: BuilderComponent[];
+  connections: BuilderConnection[];
+  buttonId: string;
+}): PromptDiagnostics {
+  const button = getComponentById(args.components, args.buttonId);
+  const template = button?.type === "Button" ? button.promptTemplate ?? "" : "";
+
+  const allInputKeys = getStateKeysFromComponents(args.components);
+  const availableVariables = resolveConnectedInputKeys({
+    components: args.components,
+    connections: args.connections,
+    buttonId: args.buttonId,
+  });
+  const aliases = buildPromptAliasMap(args.components);
+  const templateVariables = extractTemplateVariables(template);
+  const unknown = new Set<string>();
+  const disconnected = new Set<string>();
+
+  for (const token of templateVariables) {
+    const canonical =
+      aliases.get(token) ?? aliases.get(normalizeLookupKey(token)) ?? token;
+    if (!allInputKeys.includes(canonical)) {
+      unknown.add(token);
+      continue;
+    }
+
+    if (!availableVariables.includes(canonical)) {
+      disconnected.add(canonical);
+    }
+  }
+
+  return {
+    templateVariables,
+    unknownVariables: [...unknown],
+    disconnectedVariables: [...disconnected],
+    availableVariables,
+  };
+}
+
 export const useBuilderStore = create<BuilderState>((set) => ({
   appId: "app_customer_support_v1",
   version: "1.0.0",
   selectedComponentId: undefined,
+  promptEditorFocusToken: 0,
   components: [
     {
       id: "input_customer_complaint",
@@ -198,6 +311,11 @@ export const useBuilderStore = create<BuilderState>((set) => ({
     set(() =>
       id === undefined ? { selectedComponentId: undefined } : { selectedComponentId: id },
     ),
+  focusPromptEditor: (buttonId) =>
+    set((state) => ({
+      selectedComponentId: buttonId,
+      promptEditorFocusToken: state.promptEditorFocusToken + 1,
+    })),
   updateComponent: (id, patch) =>
     set((state) => ({
       components: state.components.map((item) => {
@@ -289,24 +407,26 @@ export const useBuilderStore = create<BuilderState>((set) => ({
 
 export function getPromptVariables(buttonId?: string): string[] {
   const state = getStateSnapshot();
-  const allInputKeys = state.components
-    .filter((component) => component.type === "TextArea")
-    .map((component) => component.stateKey ?? "")
-    .filter(Boolean);
+  const allInputKeys = getStateKeysFromComponents(state.components);
 
   if (!buttonId) {
     return allInputKeys;
   }
 
-  const connectedInputKeys = state.connections
-    .filter((connection) => connection.targetId === buttonId)
-    .map((connection) => getComponentById(state.components, connection.sourceId))
-    .filter((component): component is BuilderComponent => !!component)
-    .filter((component) => component.type === "TextArea")
-    .map((component) => component.stateKey ?? "")
-    .filter(Boolean);
+  return resolveConnectedInputKeys({
+    components: state.components,
+    connections: state.connections,
+    buttonId,
+  });
+}
 
-  return connectedInputKeys.length > 0 ? connectedInputKeys : allInputKeys;
+export function getPromptDiagnostics(buttonId: string): PromptDiagnostics {
+  const state = getStateSnapshot();
+  return getPromptDiagnosticsForButton({
+    components: state.components,
+    connections: state.connections,
+    buttonId,
+  });
 }
 
 export function getStateSnapshot(): BuilderState {
