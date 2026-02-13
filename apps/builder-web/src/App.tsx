@@ -86,6 +86,13 @@ interface SnapshotDiff {
   removedConnections: string[];
 }
 
+interface DiagnosticTarget {
+  componentId: string;
+  openPromptEditor: boolean;
+  eventId?: string;
+  actionNodeId?: string;
+}
+
 function getClientPoint(event: Event): { x: number; y: number } | null {
   if (event instanceof MouseEvent || event instanceof PointerEvent) {
     return { x: event.clientX, y: event.clientY };
@@ -127,6 +134,19 @@ function isPromptDiagnostic(path?: string): boolean {
     return false;
   }
   return path.includes(".promptSpec.");
+}
+
+function extractActionNodeIdFromPath(segments: string[]): string | undefined {
+  const actionGraphIndex = segments.findIndex((segment) => segment === "actionGraph");
+  if (actionGraphIndex < 0) {
+    return undefined;
+  }
+
+  if (segments[actionGraphIndex + 1] !== "nodes") {
+    return undefined;
+  }
+
+  return segments[actionGraphIndex + 2];
 }
 
 function createFileMetas(files: CompileFileContent[]): CompileFileMeta[] {
@@ -455,6 +475,10 @@ export function App(): JSX.Element {
   const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
   const [snapshotHistory, setSnapshotHistory] = useState<SnapshotEntry[]>([]);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
+  const [focusedGraphNode, setFocusedGraphNode] = useState<{
+    eventId: string;
+    nodeId: string;
+  } | null>(null);
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -490,6 +514,25 @@ export function App(): JSX.Element {
       setPreviewStateDraft(defaultPreviewStateText);
     }
   }, [defaultPreviewStateText, previewStateDirty]);
+
+  useEffect(() => {
+    if (!focusedGraphNode) {
+      return;
+    }
+
+    const event = schema.events.find((item) => item.id === focusedGraphNode.eventId);
+    if (!event) {
+      setFocusedGraphNode(null);
+      return;
+    }
+
+    const nodeExists = event.actionGraph.nodes.some(
+      (node) => node.id === focusedGraphNode.nodeId,
+    );
+    if (!nodeExists) {
+      setFocusedGraphNode(null);
+    }
+  }, [focusedGraphNode, schema.events]);
 
   useEffect(() => {
     let canceled = false;
@@ -588,6 +631,14 @@ export function App(): JSX.Element {
     return selectedButton?.eventId ?? schema.events[0]?.id ?? undefined;
   }, [components, selectedComponentId, schema.events]);
 
+  const selectedPreviewEvent = useMemo(
+    () =>
+      selectedPreviewEventId
+        ? schema.events.find((event) => event.id === selectedPreviewEventId) ?? null
+        : null,
+    [schema.events, selectedPreviewEventId],
+  );
+
   const selectedSnapshot = useMemo(
     () => snapshotHistory.find((entry) => entry.id === selectedSnapshotId) ?? null,
     [snapshotHistory, selectedSnapshotId],
@@ -618,9 +669,7 @@ export function App(): JSX.Element {
   );
 
   const resolveDiagnosticTarget = useCallback(
-    (
-      diagnostic: CompileDiagnostic,
-    ): { componentId: string; openPromptEditor: boolean } | null => {
+    (diagnostic: CompileDiagnostic): DiagnosticTarget | null => {
       const path = diagnostic.path;
       if (!path) {
         return null;
@@ -656,9 +705,12 @@ export function App(): JSX.Element {
         if (!component) {
           return null;
         }
+        const actionNodeId = extractActionNodeIdFromPath(segments);
         return {
           componentId,
           openPromptEditor: component.type === "Button" && isPromptDiagnostic(path),
+          eventId,
+          ...(actionNodeId ? { actionNodeId } : {}),
         };
       }
 
@@ -672,6 +724,15 @@ export function App(): JSX.Element {
       const target = resolveDiagnosticTarget(diagnostic);
       if (!target) {
         return;
+      }
+
+      if (target.eventId && target.actionNodeId) {
+        setFocusedGraphNode({
+          eventId: target.eventId,
+          nodeId: target.actionNodeId,
+        });
+      } else {
+        setFocusedGraphNode(null);
       }
 
       if (target.openPromptEditor) {
@@ -1103,10 +1164,59 @@ export function App(): JSX.Element {
                         Target component: <code>{target.componentId}</code>
                       </div>
                     )}
+                    {target?.eventId && (
+                      <div className="meta">
+                        Target event: <code>{target.eventId}</code>
+                      </div>
+                    )}
+                    {target?.actionNodeId && (
+                      <div className="meta">
+                        Target node: <code>{target.actionNodeId}</code>
+                      </div>
+                    )}
                   </li>
                 );
               })}
             </ul>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Event Graph</h2>
+          <p className="meta">
+            Event: {selectedPreviewEvent?.id ?? "none"} (follows selected button)
+          </p>
+          {!selectedPreviewEvent ? (
+            <p className="meta">No event available.</p>
+          ) : (
+            <>
+              <ul className="event-node-list">
+                {selectedPreviewEvent.actionGraph.nodes.map((node) => {
+                  const focused =
+                    focusedGraphNode?.eventId === selectedPreviewEvent.id &&
+                    focusedGraphNode.nodeId === node.id;
+                  return (
+                    <li
+                      key={node.id}
+                      className={`event-node-item ${focused ? "focused" : ""}`}
+                    >
+                      <code>{node.id}</code>
+                      <span className="meta">kind: {node.kind}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="meta">Edges</div>
+              <ul className="event-edge-list">
+                {selectedPreviewEvent.actionGraph.edges.map((edge) => (
+                  <li key={`${edge.from}-${edge.to}`}>
+                    <code>{edge.from}</code>
+                    <span className="meta">{" -> "}</span>
+                    <code>{edge.to}</code>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </section>
 

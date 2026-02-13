@@ -278,6 +278,39 @@ pre {
   cursor: not-allowed;
 }
 
+.event-node-list {
+  margin: 8px 0;
+  padding-left: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.event-node-item {
+  list-style: none;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 7px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.event-node-item.focused {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.18);
+  background: #f0f9ff;
+}
+
+.event-edge-list {
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
 .snapshot-list {
   margin: 0;
   padding-left: 0;
