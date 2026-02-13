@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AppCompiler } from "@form-builder/compiler";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import {
   AppDefinitionSchema,
   ExecuteEventResponseSchema,
+  type AppDefinition,
 } from "@form-builder/contracts";
 import { executeEvent } from "../../application/execute-event.js";
 import {
@@ -24,6 +25,35 @@ const PreviewExecuteRequestSchema = z.object({
   app: z.unknown(),
   state: z.record(z.string(), z.unknown()),
 });
+
+const ProjectUpsertRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  note: z.string().optional(),
+  appDefinition: z.unknown(),
+  workspaceSnapshot: z.unknown().optional(),
+  previewStateDraft: z.string().optional(),
+  previewStateDirty: z.boolean().optional(),
+});
+
+function requireApiKey(request: { headers: Record<string, string | string[] | undefined> }): void {
+  const expected = process.env.FORM_BUILDER_API_KEY?.trim();
+  if (!expected) {
+    return;
+  }
+  const auth = request.headers.authorization;
+  const value = Array.isArray(auth) ? auth[0] : auth;
+  if (!value || !value.startsWith("Bearer ")) {
+    throw new Error("Missing Authorization bearer token.");
+  }
+  const token = value.slice("Bearer ".length).trim();
+  if (token !== expected) {
+    throw new Error("Invalid Authorization bearer token.");
+  }
+}
+
+function isSafeProjectId(projectId: string): boolean {
+  return /^[a-zA-Z0-9_-]{3,80}$/.test(projectId);
+}
 
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -50,6 +80,55 @@ async function findRepoRoot(startDir: string): Promise<string> {
   throw new Error(
     "Could not locate repo root (missing pnpm-workspace.yaml within 10 parent directories).",
   );
+}
+
+function resolveDataDir(): string {
+  const configured = process.env.FORM_BUILDER_DATA_DIR?.trim();
+  if (configured) {
+    return resolve(configured);
+  }
+  // Default: alongside runtime-api when running from apps/runtime-api.
+  return resolve(process.cwd(), "data");
+}
+
+async function writeJsonFile(path: string, payload: unknown): Promise<void> {
+  await mkdir(resolve(path, ".."), { recursive: true });
+  await writeFile(path, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  const raw = await readFile(path, "utf8");
+  return JSON.parse(raw) as unknown;
+}
+
+interface ProjectIndexEntry {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  latestVersionId: string;
+}
+
+interface ProjectVersionIndexEntry {
+  id: string;
+  savedAt: string;
+  note?: string | undefined;
+}
+
+interface ProjectMetaV1 extends ProjectIndexEntry {
+  kind: "form-first-builder-project-v1";
+  versions: ProjectVersionIndexEntry[];
+}
+
+interface ProjectVersionV1 {
+  kind: "form-first-builder-project-version-v1";
+  id: string;
+  savedAt: string;
+  appDefinition: AppDefinition;
+  workspaceSnapshot?: unknown | undefined;
+  previewStateDraft?: string | undefined;
+  previewStateDirty?: boolean | undefined;
+  note?: string | undefined;
 }
 
 async function collectTextFiles(args: {
@@ -182,6 +261,193 @@ export async function registerBuilderRoutes(app: FastifyInstance): Promise<void>
         anthropic: anthropicModels.length > 0 ? "env" : "default",
       },
     });
+  });
+
+  app.get("/builder/projects", async (request, reply) => {
+    try {
+      requireApiKey(request);
+      const dataDir = resolveDataDir();
+      const root = join(dataDir, "projects");
+      await mkdir(root, { recursive: true });
+
+      const entries = await readdir(root, { withFileTypes: true });
+      const projects: ProjectIndexEntry[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const projectId = entry.name;
+        if (!isSafeProjectId(projectId)) {
+          continue;
+        }
+        const metaPath = join(root, projectId, "project.json");
+        try {
+          const meta = (await readJsonFile(metaPath)) as unknown;
+          if (!meta || typeof meta !== "object") {
+            continue;
+          }
+          const record = meta as Record<string, unknown>;
+          if (record.kind !== "form-first-builder-project-v1") {
+            continue;
+          }
+          if (
+            typeof record.id !== "string" ||
+            typeof record.name !== "string" ||
+            typeof record.createdAt !== "string" ||
+            typeof record.updatedAt !== "string" ||
+            typeof record.latestVersionId !== "string"
+          ) {
+            continue;
+          }
+          projects.push({
+            id: record.id,
+            name: record.name,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            latestVersionId: record.latestVersionId,
+          });
+        } catch {
+          continue;
+        }
+      }
+
+      return reply.send({ projects, at: new Date().toISOString() });
+    } catch (error) {
+      return reply.status(401).send({
+        error: "UNAUTHORIZED",
+        message: (error as Error).message,
+      });
+    }
+  });
+
+  app.get("/builder/projects/:projectId", async (request, reply) => {
+    try {
+      requireApiKey(request);
+      const params = request.params as { projectId?: string };
+      const projectId = params.projectId;
+      if (!projectId || !isSafeProjectId(projectId)) {
+        return reply.status(400).send({ error: "INVALID_PROJECT_ID" });
+      }
+
+      const dataDir = resolveDataDir();
+      const metaPath = join(dataDir, "projects", projectId, "project.json");
+      const meta = (await readJsonFile(metaPath)) as ProjectMetaV1;
+      if (!meta || meta.kind !== "form-first-builder-project-v1") {
+        return reply.status(404).send({ error: "PROJECT_NOT_FOUND" });
+      }
+
+      const latest = meta.latestVersionId;
+      const versionPath = join(
+        dataDir,
+        "projects",
+        projectId,
+        "versions",
+        `${latest}.json`,
+      );
+      const version = (await readJsonFile(versionPath)) as ProjectVersionV1;
+      if (!version || version.kind !== "form-first-builder-project-version-v1") {
+        return reply.status(500).send({ error: "PROJECT_VERSION_CORRUPT" });
+      }
+
+      return reply.send({ project: meta, latest: version });
+    } catch (error) {
+      const message = (error as Error).message;
+      const code = message.includes("Authorization") ? 401 : 500;
+      return reply.status(code).send({
+        error: code === 401 ? "UNAUTHORIZED" : "PROJECT_READ_FAILED",
+        message,
+      });
+    }
+  });
+
+  app.put("/builder/projects/:projectId", async (request, reply) => {
+    try {
+      requireApiKey(request);
+      const params = request.params as { projectId?: string };
+      const projectId = params.projectId;
+      if (!projectId || !isSafeProjectId(projectId)) {
+        return reply.status(400).send({ error: "INVALID_PROJECT_ID" });
+      }
+
+      const payload = ProjectUpsertRequestSchema.safeParse(request.body);
+      if (!payload.success) {
+        return reply.status(400).send({
+          error: "INVALID_REQUEST",
+          details: payload.error.issues,
+        });
+      }
+
+      const parsedApp = AppDefinitionSchema.safeParse(payload.data.appDefinition);
+      if (!parsedApp.success) {
+        return reply.status(400).send({
+          error: "INVALID_APP_DEFINITION",
+          details: parsedApp.error.issues,
+        });
+      }
+
+      const dataDir = resolveDataDir();
+      const projectDir = join(dataDir, "projects", projectId);
+      const versionsDir = join(projectDir, "versions");
+      await mkdir(versionsDir, { recursive: true });
+
+      const metaPath = join(projectDir, "project.json");
+      const now = new Date().toISOString();
+      const versionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      let meta: ProjectMetaV1 | null = null;
+      try {
+        const loaded = (await readJsonFile(metaPath)) as ProjectMetaV1;
+        if (loaded && loaded.kind === "form-first-builder-project-v1") {
+          meta = loaded;
+        }
+      } catch {
+        meta = null;
+      }
+
+      const nextMeta: ProjectMetaV1 = meta
+        ? {
+            ...meta,
+            name: payload.data.name?.trim() || meta.name,
+            updatedAt: now,
+            latestVersionId: versionId,
+            versions: [
+              { id: versionId, savedAt: now, note: payload.data.note },
+              ...meta.versions,
+            ].slice(0, 50),
+          }
+        : {
+            kind: "form-first-builder-project-v1",
+            id: projectId,
+            name: payload.data.name?.trim() || projectId,
+            createdAt: now,
+            updatedAt: now,
+            latestVersionId: versionId,
+            versions: [{ id: versionId, savedAt: now, note: payload.data.note }],
+          };
+
+      const version: ProjectVersionV1 = {
+        kind: "form-first-builder-project-version-v1",
+        id: versionId,
+        savedAt: now,
+        appDefinition: parsedApp.data,
+        workspaceSnapshot: payload.data.workspaceSnapshot,
+        previewStateDraft: payload.data.previewStateDraft,
+        previewStateDirty: payload.data.previewStateDirty,
+        note: payload.data.note,
+      };
+
+      await writeJsonFile(metaPath, nextMeta);
+      await writeJsonFile(join(versionsDir, `${versionId}.json`), version);
+
+      return reply.send({ project: nextMeta, saved: version });
+    } catch (error) {
+      const message = (error as Error).message;
+      const code = message.includes("Authorization") ? 401 : 500;
+      return reply.status(code).send({
+        error: code === 401 ? "UNAUTHORIZED" : "PROJECT_WRITE_FAILED",
+        message,
+      });
+    }
   });
 
   app.post("/builder/compile", async (request, reply) => {

@@ -716,6 +716,123 @@ async function fetchModelCatalogViaApi(): Promise<BuilderModelCatalogResponse> {
   return body as BuilderModelCatalogResponse;
 }
 
+function getBuilderAuthHeaders(): Record<string, string> {
+  const apiKey = import.meta.env.VITE_BUILDER_API_KEY as string | undefined;
+  if (!apiKey || apiKey.trim().length === 0) {
+    return {};
+  }
+  return { Authorization: `Bearer ${apiKey.trim()}` };
+}
+
+async function listProjectsViaApi(): Promise<{
+  projects: Array<{
+    id: string;
+    name: string;
+    createdAt: string;
+    updatedAt: string;
+    latestVersionId: string;
+  }>;
+}> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/projects`, {
+    headers: { ...getBuilderAuthHeaders() },
+  });
+  const body = (await response.json()) as
+    | { projects: Array<{ id: string; name: string; createdAt: string; updatedAt: string; latestVersionId: string }> }
+    | { error?: string; message?: string };
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Project list API failed";
+    throw new Error(message);
+  }
+  return body as { projects: Array<{ id: string; name: string; createdAt: string; updatedAt: string; latestVersionId: string }> };
+}
+
+async function upsertProjectViaApi(args: {
+  projectId: string;
+  name?: string;
+  note?: string;
+  appDefinition: AppDefinition;
+  workspaceSnapshot: BuilderWorkspaceSnapshot;
+  previewStateDraft: string;
+  previewStateDirty: boolean;
+}): Promise<{ project: { id: string; latestVersionId: string }; saved: { id: string } }> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/projects/${args.projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...getBuilderAuthHeaders() },
+    body: JSON.stringify({
+      name: args.name,
+      note: args.note,
+      appDefinition: args.appDefinition,
+      workspaceSnapshot: args.workspaceSnapshot,
+      previewStateDraft: args.previewStateDraft,
+      previewStateDirty: args.previewStateDirty,
+    }),
+  });
+  const body = (await response.json()) as
+    | { project: { id: string; latestVersionId: string }; saved: { id: string } }
+    | { error?: string; message?: string };
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Project save API failed";
+    throw new Error(message);
+  }
+  return body as { project: { id: string; latestVersionId: string }; saved: { id: string } };
+}
+
+async function fetchProjectViaApi(projectId: string): Promise<{
+  project: { id: string; latestVersionId: string; name: string };
+  latest: {
+    appDefinition: AppDefinition;
+    workspaceSnapshot?: unknown;
+    previewStateDraft?: string;
+    previewStateDirty?: boolean;
+  };
+}> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/projects/${projectId}`, {
+    headers: { ...getBuilderAuthHeaders() },
+  });
+  const body = (await response.json()) as
+    | {
+        project: { id: string; latestVersionId: string; name: string };
+        latest: {
+          appDefinition: AppDefinition;
+          workspaceSnapshot?: unknown;
+          previewStateDraft?: string;
+          previewStateDirty?: boolean;
+        };
+      }
+    | { error?: string; message?: string };
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Project load API failed";
+    throw new Error(message);
+  }
+  return body as {
+    project: { id: string; latestVersionId: string; name: string };
+    latest: {
+      appDefinition: AppDefinition;
+      workspaceSnapshot?: unknown;
+      previewStateDraft?: string;
+      previewStateDirty?: boolean;
+    };
+  };
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
@@ -2062,6 +2179,86 @@ export function App(): JSX.Element {
             <button onClick={() => void exportBundle()}>Export Bundle</button>
             <button onClick={() => void exportDeployableBundle()}>
               Export Deployable Bundle
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const result = await upsertProjectViaApi({
+                      projectId: appId,
+                      name: appId,
+                      note: "saved from builder",
+                      appDefinition: schema,
+                      workspaceSnapshot: currentWorkspace,
+                      previewStateDraft,
+                      previewStateDirty,
+                    });
+                    setCompileSummary(
+                      `Saved project '${result.project.id}' (version ${result.saved.id}).`,
+                    );
+                  } catch (error) {
+                    setCompileSummary(
+                      `Save project failed: ${(error as Error).message}`,
+                    );
+                  }
+                })();
+              }}
+            >
+              Save Server
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const loaded = await fetchProjectViaApi(appId);
+                    const workspace = loaded.latest.workspaceSnapshot
+                      ? parseBuilderWorkspaceSnapshot(loaded.latest.workspaceSnapshot)
+                      : null;
+                    if (workspace) {
+                      loadWorkspaceSnapshot(workspace);
+                    } else {
+                      loadFromAppDefinition(loaded.latest.appDefinition);
+                    }
+                    if (loaded.latest.previewStateDraft) {
+                      setPreviewStateDraft(loaded.latest.previewStateDraft);
+                      setPreviewStateDirty(loaded.latest.previewStateDirty ?? false);
+                    } else {
+                      setPreviewStateDirty(false);
+                    }
+                    setCompileSummary(
+                      `Loaded project '${loaded.project.id}' (${loaded.project.name}).`,
+                    );
+                  } catch (error) {
+                    setCompileSummary(
+                      `Load project failed: ${(error as Error).message}`,
+                    );
+                  }
+                })();
+              }}
+            >
+              Load Server
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const list = await listProjectsViaApi();
+                    setCompileSummary(
+                      list.projects.length > 0
+                        ? `Server projects: ${list.projects
+                            .map((p) => `${p.id} (${p.name})`)
+                            .join(", ")}`
+                        : "Server projects: (none)",
+                    );
+                  } catch (error) {
+                    setCompileSummary(
+                      `List projects failed: ${(error as Error).message}`,
+                    );
+                  }
+                })();
+              }}
+            >
+              List Server
             </button>
             <label className="import-label">
               Import Bundle
