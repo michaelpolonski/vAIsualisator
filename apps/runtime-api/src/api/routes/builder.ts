@@ -5,6 +5,7 @@ import { AppCompiler } from "@form-builder/compiler";
 const CompileBuilderRequestSchema = z.object({
   app: z.unknown(),
   target: z.literal("node-fastify-react").optional(),
+  includeFileContents: z.boolean().optional(),
 });
 
 export async function registerBuilderRoutes(app: FastifyInstance): Promise<void> {
@@ -31,6 +32,12 @@ export async function registerBuilderRoutes(app: FastifyInstance): Promise<void>
           path: file.path,
           bytes: Buffer.byteLength(file.content, "utf8"),
         })),
+        fileContents: payload.data.includeFileContents
+          ? result.files.map((file) => ({
+              path: file.path,
+              content: file.content,
+            }))
+          : undefined,
         generatedAt: new Date().toISOString(),
       });
     } catch (error) {

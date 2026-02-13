@@ -30,4 +30,30 @@ describe("builder compile route", () => {
 
     await app.close();
   });
+
+  it("returns generated file contents when requested", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/builder/compile",
+      payload: {
+        app: defaultApp,
+        includeFileContents: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      files: Array<{ path: string; bytes: number }>;
+      fileContents?: Array<{ path: string; content: string }>;
+    };
+
+    expect(body.fileContents).toBeDefined();
+    expect(body.fileContents?.length).toBe(body.files.length);
+    expect(body.fileContents?.[0]?.content.length).toBeGreaterThan(0);
+
+    await app.close();
+  });
 });

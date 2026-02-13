@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { AppCompiler } from "@form-builder/compiler";
 import type { AppDefinition } from "@form-builder/contracts";
 import { Palette } from "./palette/Palette.js";
@@ -20,12 +26,20 @@ interface CompileFileMeta {
   bytes: number;
 }
 
+interface CompileFileContent {
+  path: string;
+  content: string;
+}
+
 interface BuilderCompileResponse {
   diagnostics: CompileDiagnostic[];
   docker: { imageName: string; tags: string[] };
   files: CompileFileMeta[];
+  fileContents?: CompileFileContent[];
   generatedAt: string;
 }
+
+type CompileSource = "none" | "api" | "local";
 
 function getClientPoint(event: Event): { x: number; y: number } | null {
   if (event instanceof MouseEvent || event instanceof PointerEvent) {
@@ -53,14 +67,37 @@ function formatDiagnostics(diagnostics: CompileDiagnostic[]): string {
     .join("\n");
 }
 
-async function compileViaApi(app: AppDefinition): Promise<BuilderCompileResponse> {
+function createFileMetas(files: CompileFileContent[]): CompileFileMeta[] {
+  return files.map((file) => ({
+    path: file.path,
+    bytes: new TextEncoder().encode(file.content).length,
+  }));
+}
+
+function downloadJsonFile(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function compileViaApi(args: {
+  app: AppDefinition;
+  includeFileContents?: boolean;
+}): Promise<BuilderCompileResponse> {
   const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
   const response = await fetch(`${apiBase}/builder/compile`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      app,
+      app: args.app,
       target: "node-fastify-react",
+      includeFileContents: args.includeFileContents ?? false,
     }),
   });
 
@@ -81,6 +118,30 @@ async function compileViaApi(app: AppDefinition): Promise<BuilderCompileResponse
   return body as BuilderCompileResponse;
 }
 
+async function compileLocally(args: {
+  app: AppDefinition;
+  includeFileContents?: boolean;
+}): Promise<BuilderCompileResponse> {
+  const compiler = new AppCompiler();
+  const result = await compiler.compile({
+    app: args.app,
+    target: "node-fastify-react",
+  });
+
+  const fileContents: CompileFileContent[] = result.files.map((file) => ({
+    path: file.path,
+    content: file.content,
+  }));
+
+  return {
+    diagnostics: result.diagnostics,
+    docker: result.docker,
+    files: createFileMetas(fileContents),
+    ...(args.includeFileContents ? { fileContents } : {}),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
@@ -90,7 +151,7 @@ export function App(): JSX.Element {
 
   const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
   const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
-  const [compileSource, setCompileSource] = useState<"none" | "api" | "local">("none");
+  const [compileSource, setCompileSource] = useState<CompileSource>("none");
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
 
@@ -109,13 +170,14 @@ export function App(): JSX.Element {
     setCompileSummary("Compiling...");
 
     try {
-      const apiResult = await compileViaApi(schema);
+      const apiResult = await compileViaApi({ app: schema });
       const diagnosticsText = formatDiagnostics(apiResult.diagnostics);
-      setCompileFiles(apiResult.files);
+
       setCompileSource("api");
+      setCompileFiles(apiResult.files);
 
       if (apiResult.diagnostics.some((item) => item.severity === "error")) {
-        setCompileSummary(diagnosticsText);
+        setCompileSummary(diagnosticsText || "Compilation failed with diagnostics.");
         return;
       }
 
@@ -125,19 +187,11 @@ export function App(): JSX.Element {
       );
       return;
     } catch (apiError) {
-      const compiler = new AppCompiler();
-      const localResult = await compiler.compile({
-        app: schema,
-        target: "node-fastify-react",
-      });
+      const localResult = await compileLocally({ app: schema });
       const diagnosticsText = formatDiagnostics(localResult.diagnostics);
-      const localFiles: CompileFileMeta[] = localResult.files.map((file) => ({
-        path: file.path,
-        bytes: new TextEncoder().encode(file.content).length,
-      }));
 
-      setCompileFiles(localFiles);
       setCompileSource("local");
+      setCompileFiles(localResult.files);
 
       if (localResult.diagnostics.some((item) => item.severity === "error")) {
         setCompileSummary(
@@ -149,6 +203,86 @@ export function App(): JSX.Element {
       const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
       setCompileSummary(
         `Compiled ${localResult.files.length} artifacts locally (API fallback: ${(apiError as Error).message}). Docker image: ${localResult.docker.imageName}:latest${warningSuffix}`,
+      );
+    }
+  }, [schema]);
+
+  const exportBundle = useCallback(async (): Promise<void> => {
+    setCompileSummary("Exporting generated bundle...");
+
+    try {
+      const apiResult = await compileViaApi({
+        app: schema,
+        includeFileContents: true,
+      });
+      const diagnosticsText = formatDiagnostics(apiResult.diagnostics);
+
+      setCompileSource("api");
+      setCompileFiles(apiResult.files);
+
+      if (apiResult.diagnostics.some((item) => item.severity === "error")) {
+        setCompileSummary(
+          `Cannot export due to compile errors:\n${diagnosticsText}`,
+        );
+        return;
+      }
+
+      if (!apiResult.fileContents || apiResult.fileContents.length === 0) {
+        setCompileSummary("Compile succeeded but no file contents were returned for export.");
+        return;
+      }
+
+      downloadJsonFile(`${schema.appId}-bundle.json`, {
+        appId: schema.appId,
+        version: schema.version,
+        target: "node-fastify-react",
+        source: "api",
+        generatedAt: apiResult.generatedAt,
+        docker: apiResult.docker,
+        diagnostics: apiResult.diagnostics,
+        files: apiResult.fileContents,
+      });
+
+      const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
+      setCompileSummary(
+        `Exported bundle with ${apiResult.fileContents.length} generated files via API.${warningSuffix}`,
+      );
+    } catch (apiError) {
+      const localResult = await compileLocally({
+        app: schema,
+        includeFileContents: true,
+      });
+      const diagnosticsText = formatDiagnostics(localResult.diagnostics);
+
+      setCompileSource("local");
+      setCompileFiles(localResult.files);
+
+      if (localResult.diagnostics.some((item) => item.severity === "error")) {
+        setCompileSummary(
+          `Cannot export. Compile API unavailable (${(apiError as Error).message}) and local compile has errors:\n${diagnosticsText}`,
+        );
+        return;
+      }
+
+      if (!localResult.fileContents || localResult.fileContents.length === 0) {
+        setCompileSummary("Local compile succeeded but no file contents were available for export.");
+        return;
+      }
+
+      downloadJsonFile(`${schema.appId}-bundle.json`, {
+        appId: schema.appId,
+        version: schema.version,
+        target: "node-fastify-react",
+        source: "local",
+        generatedAt: localResult.generatedAt,
+        docker: localResult.docker,
+        diagnostics: localResult.diagnostics,
+        files: localResult.fileContents,
+      });
+
+      const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
+      setCompileSummary(
+        `Exported bundle with ${localResult.fileContents.length} generated files locally (API fallback: ${(apiError as Error).message}).${warningSuffix}`,
       );
     }
   }, [schema]);
@@ -206,7 +340,10 @@ export function App(): JSX.Element {
       <main className="layout">
         <header className="header">
           <h1>Form-First AI Builder</h1>
-          <button onClick={compileNow}>Run / Deploy (F5)</button>
+          <div className="header-actions">
+            <button onClick={() => void compileNow()}>Run / Deploy (F5)</button>
+            <button onClick={() => void exportBundle()}>Export Bundle</button>
+          </div>
         </header>
 
         <section className="workspace">
@@ -220,21 +357,21 @@ export function App(): JSX.Element {
           <pre>{JSON.stringify(schema, null, 2)}</pre>
         </section>
 
-      <section className="panel">
-        <h2>Compilation Output</h2>
-        <p className="meta">Source: {compileSource}</p>
-        <pre>{compileSummary || "No compile run yet."}</pre>
-        {compileFiles.length > 0 && (
-          <ul className="file-list">
-            {compileFiles.map((file) => (
-              <li key={file.path}>
-                <code>{file.path}</code> ({file.bytes} bytes)
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
-  </DndContext>
+        <section className="panel">
+          <h2>Compilation Output</h2>
+          <p className="meta">Source: {compileSource}</p>
+          <pre>{compileSummary || "No compile run yet."}</pre>
+          {compileFiles.length > 0 && (
+            <ul className="file-list">
+              {compileFiles.map((file) => (
+                <li key={file.path}>
+                  <code>{file.path}</code> ({file.bytes} bytes)
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
+    </DndContext>
   );
 }
