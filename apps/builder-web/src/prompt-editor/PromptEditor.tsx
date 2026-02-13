@@ -4,6 +4,7 @@ import {
   getPromptVariables,
   useBuilderStore,
 } from "../state/builder-store.js";
+import { DEFAULT_OUTPUT_SCHEMA_JSON } from "../prompt-schema/output-schema.js";
 
 export function PromptEditor(): JSX.Element {
   const selectedId = useBuilderStore((state) => state.selectedComponentId);
@@ -25,6 +26,7 @@ export function PromptEditor(): JSX.Element {
           disconnectedVariables: [],
           templateVariables: [],
           availableVariables: [],
+          invalidOutputSchema: null,
         };
 
   useEffect(() => {
@@ -106,6 +108,25 @@ export function PromptEditor(): JSX.Element {
               </span>
             ))}
           </div>
+        </div>
+      )}
+      <div>
+        <div className="meta">Output schema (JSON shape):</div>
+        <textarea
+          className="prompt-input"
+          value={selected.outputSchemaJson ?? DEFAULT_OUTPUT_SCHEMA_JSON}
+          onChange={(event) =>
+            update(selected.id, {
+              outputSchemaJson: event.target.value,
+            })
+          }
+          placeholder={DEFAULT_OUTPUT_SCHEMA_JSON}
+        />
+      </div>
+      {diagnostics.invalidOutputSchema && (
+        <div className="warning-box">
+          <div className="warning-title">Invalid Output Schema</div>
+          <p className="warning-text">{diagnostics.invalidOutputSchema}</p>
         </div>
       )}
     </aside>

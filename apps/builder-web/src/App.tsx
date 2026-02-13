@@ -279,6 +279,7 @@ function componentSignature(component: BuilderWorkspaceSnapshot["components"][nu
       ...base,
       eventId: component.eventId ?? "",
       promptTemplate: component.promptTemplate ?? "",
+      outputSchemaJson: component.outputSchemaJson ?? "",
     });
   }
 

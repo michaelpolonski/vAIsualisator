@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import type { AppDefinition } from "@form-builder/contracts";
+import {
+  DEFAULT_OUTPUT_SCHEMA_JSON,
+  parseOutputSchemaShape,
+} from "../prompt-schema/output-schema.js";
 
 export type BuilderComponentType = "TextArea" | "Button" | "DataTable";
 export interface BuilderPosition {
@@ -16,6 +20,7 @@ export interface BuilderComponent {
   dataKey?: string;
   eventId?: string;
   promptTemplate?: string;
+  outputSchemaJson?: string;
 }
 
 export interface BuilderConnection {
@@ -262,6 +267,9 @@ function parseSnapshotComponent(value: unknown): BuilderComponent | null {
       ...(typeof value.promptTemplate === "string"
         ? { promptTemplate: value.promptTemplate }
         : {}),
+      ...(typeof value.outputSchemaJson === "string"
+        ? { outputSchemaJson: value.outputSchemaJson }
+        : { outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON }),
     };
   }
 
@@ -339,6 +347,10 @@ function normalizeBuilderComponentIdentifiers(
     return {
       ...component,
       eventId,
+      outputSchemaJson:
+        typeof component.outputSchemaJson === "string"
+          ? component.outputSchemaJson
+          : DEFAULT_OUTPUT_SCHEMA_JSON,
     };
   });
 }
@@ -432,13 +444,22 @@ function buildBuilderFromAppDefinition(app: AppDefinition): {
     }
 
     if (component.type === "Button") {
+      const event = app.events.find((item) => item.trigger.componentId === component.id);
+      const promptNode = event?.actionGraph.nodes.find((node) => node.kind === "PromptTask");
       return {
         id: component.id,
         type: "Button",
         label: component.label,
         position: nextPosition(index),
         eventId: component.events.onClick ?? `evt_${component.id}_click`,
-        promptTemplate: "",
+        promptTemplate:
+          promptNode && promptNode.kind === "PromptTask"
+            ? promptNode.promptSpec.template
+            : "",
+        outputSchemaJson:
+          promptNode && promptNode.kind === "PromptTask"
+            ? JSON.stringify(promptNode.promptSpec.outputSchema.shape, null, 2)
+            : DEFAULT_OUTPUT_SCHEMA_JSON,
       };
     }
 
@@ -475,6 +496,7 @@ function buildBuilderFromAppDefinition(app: AppDefinition): {
     const promptNode = event.actionGraph.nodes.find((node) => node.kind === "PromptTask");
     if (promptNode && promptNode.kind === "PromptTask") {
       button.promptTemplate = promptNode.promptSpec.template;
+      button.outputSchemaJson = JSON.stringify(promptNode.promptSpec.outputSchema.shape, null, 2);
     }
 
     const inputStateKeys = new Set<string>();
@@ -606,6 +628,7 @@ export interface PromptDiagnostics {
   unknownVariables: string[];
   disconnectedVariables: string[];
   availableVariables: string[];
+  invalidOutputSchema: string | null;
 }
 
 export function getPromptDiagnosticsForButton(args: {
@@ -626,6 +649,10 @@ export function getPromptDiagnosticsForButton(args: {
   const templateVariables = extractTemplateVariables(template);
   const unknown = new Set<string>();
   const disconnected = new Set<string>();
+  const outputSchemaResult =
+    button?.type === "Button"
+      ? parseOutputSchemaShape(button.outputSchemaJson)
+      : { shape: {}, error: undefined };
 
   for (const token of templateVariables) {
     const canonical =
@@ -645,6 +672,7 @@ export function getPromptDiagnosticsForButton(args: {
     unknownVariables: [...unknown],
     disconnectedVariables: [...disconnected],
     availableVariables,
+    invalidOutputSchema: outputSchemaResult.error ?? null,
   };
 }
 
@@ -669,6 +697,7 @@ export const useBuilderStore = create<BuilderState>((set) => ({
       eventId: "evt_analyze_click",
       promptTemplate:
         "Take the text from {{customerComplaint}}, determine the sentiment, and suggest a polite reply.",
+      outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON,
     },
     {
       id: "table_results",
@@ -730,6 +759,7 @@ export const useBuilderStore = create<BuilderState>((set) => ({
               fallback: `evt_${idBase}_${seq}_click`,
             }),
             promptTemplate: "",
+            outputSchemaJson: DEFAULT_OUTPUT_SCHEMA_JSON,
           },
         ],
       }));
@@ -813,6 +843,8 @@ export const useBuilderStore = create<BuilderState>((set) => ({
               fallback: `evt_${item.id}_click`,
               excludeComponentId: item.id,
             }),
+            outputSchemaJson:
+              patch.outputSchemaJson ?? item.outputSchemaJson ?? DEFAULT_OUTPUT_SCHEMA_JSON,
           };
         }
 

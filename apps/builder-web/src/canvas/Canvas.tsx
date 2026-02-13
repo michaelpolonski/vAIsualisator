@@ -128,7 +128,8 @@ export function Canvas(props: {
             selected: selectedId === component.id,
             promptWarningCount: promptDiagnostics
               ? promptDiagnostics.unknownVariables.length +
-                promptDiagnostics.disconnectedVariables.length
+                promptDiagnostics.disconnectedVariables.length +
+                (promptDiagnostics.invalidOutputSchema ? 1 : 0)
               : 0,
             onSelect: (id: string) => selectComponent(id),
             onOpenPromptEditor: (id: string) => focusPromptEditor(id),

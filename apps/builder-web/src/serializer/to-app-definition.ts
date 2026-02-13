@@ -3,6 +3,7 @@ import type {
   BuilderComponent,
   BuilderConnection,
 } from "../state/builder-store.js";
+import { parseOutputSchemaShape } from "../prompt-schema/output-schema.js";
 
 function buildStateModel(components: BuilderComponent[]): AppDefinition["stateModel"] {
   const stateModel: AppDefinition["stateModel"] = {};
@@ -116,13 +117,7 @@ export function toAppDefinition(args: {
                 },
                 outputSchema: {
                   type: "object",
-                  shape: {
-                    sentiment: {
-                      type: "string",
-                      enum: ["positive", "neutral", "negative"],
-                    },
-                    reply: { type: "string", minLength: 1 },
-                  },
+                  shape: parseOutputSchemaShape(component.outputSchemaJson).shape,
                 },
               },
             },
