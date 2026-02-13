@@ -6,7 +6,10 @@ import {
   ExecuteEventResponseSchema,
 } from "@form-builder/contracts";
 import { executeEvent } from "../../application/execute-event.js";
-import { createProviderRegistry } from "../../infrastructure/provider-registry.js";
+import {
+  createProviderRegistry,
+  getProviderStatusSnapshot,
+} from "../../infrastructure/provider-registry.js";
 
 const CompileBuilderRequestSchema = z.object({
   app: z.unknown(),
@@ -20,6 +23,13 @@ const PreviewExecuteRequestSchema = z.object({
 });
 
 export async function registerBuilderRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/builder/providers/status", async (_request, reply) => {
+    return reply.send({
+      providers: getProviderStatusSnapshot(process.env),
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
   app.post("/builder/compile", async (request, reply) => {
     const payload = CompileBuilderRequestSchema.safeParse(request.body);
     if (!payload.success) {

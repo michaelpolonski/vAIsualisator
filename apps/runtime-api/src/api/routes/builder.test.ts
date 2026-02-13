@@ -4,6 +4,31 @@ import { registerBuilderRoutes } from "./builder.js";
 import { defaultApp } from "../../domain/apps/default-app.js";
 
 describe("builder compile route", () => {
+  it("returns provider status snapshot", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/builder/providers/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      providers: {
+        mock: { available: boolean; reason: string | null };
+        openai: { available: boolean; reason: string | null };
+        anthropic: { available: boolean; reason: string | null };
+      };
+      checkedAt: string;
+    };
+
+    expect(body.providers.mock.available).toBe(true);
+    expect(typeof body.checkedAt).toBe("string");
+
+    await app.close();
+  });
+
   it("compiles app schema and returns file metadata", async () => {
     const app = Fastify();
     await registerBuilderRoutes(app);

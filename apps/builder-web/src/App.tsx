@@ -18,6 +18,7 @@ import {
   type BuilderComponentType,
 } from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
+import type { SupportedModelProvider } from "./prompt-schema/model-policy.js";
 import "./styles.css";
 
 interface CompileDiagnostic {
@@ -48,6 +49,16 @@ interface BuilderCompileResponse {
 interface BuilderPreviewResponse {
   statePatch: Record<string, unknown>;
   logs: Array<{ at: string; eventId: string; stage: string; message: string }>;
+}
+
+interface ProviderStatusItem {
+  available: boolean;
+  reason: string | null;
+}
+
+interface BuilderProviderStatusResponse {
+  providers: Partial<Record<SupportedModelProvider, ProviderStatusItem>>;
+  checkedAt: string;
 }
 
 type CompileSource = "none" | "api" | "local";
@@ -445,6 +456,26 @@ async function previewViaApi(args: {
   return body as BuilderPreviewResponse;
 }
 
+async function fetchProviderStatusViaApi(): Promise<BuilderProviderStatusResponse> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/providers/status`);
+  const body = (await response.json()) as
+    | BuilderProviderStatusResponse
+    | { error?: string; message?: string };
+
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Provider status API failed";
+    throw new Error(message);
+  }
+
+  return body as BuilderProviderStatusResponse;
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
@@ -477,6 +508,12 @@ export function App(): JSX.Element {
   const [previewStateDraft, setPreviewStateDraft] = useState("{}");
   const [autosaveReady, setAutosaveReady] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
+  const [providerStatusSummary, setProviderStatusSummary] = useState(
+    "Provider status unavailable.",
+  );
+  const [providerStatus, setProviderStatus] = useState<
+    Partial<Record<SupportedModelProvider, ProviderStatusItem>> | null
+  >(null);
   const [snapshotHistory, setSnapshotHistory] = useState<SnapshotEntry[]>([]);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [focusedGraphNode, setFocusedGraphNode] = useState<{
@@ -569,6 +606,39 @@ export function App(): JSX.Element {
       window.clearTimeout(timer);
     };
   }, [schema]);
+
+  useEffect(() => {
+    let canceled = false;
+    void (async () => {
+      try {
+        const status = await fetchProviderStatusViaApi();
+        if (canceled) {
+          return;
+        }
+        setProviderStatus(status.providers);
+        const providerNames = (Object.keys(status.providers) as SupportedModelProvider[])
+          .filter((provider) => status.providers[provider]?.available)
+          .join(", ");
+        setProviderStatusSummary(
+          providerNames.length > 0
+            ? `Providers ready: ${providerNames}`
+            : "No external providers configured. Mock is available.",
+        );
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        setProviderStatus(null);
+        setProviderStatusSummary(
+          `Provider status unavailable: ${(error as Error).message}`,
+        );
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -1122,7 +1192,10 @@ export function App(): JSX.Element {
         <section className="workspace">
           <Palette />
           <Canvas onCanvasElementChange={setCanvasElement} />
-          <PromptEditor />
+          <PromptEditor
+            providerStatus={providerStatus}
+            providerStatusSummary={providerStatusSummary}
+          />
         </section>
 
         <section className="panel">

@@ -3,6 +3,17 @@ import { MockProvider } from "./providers/mock-provider.js";
 import { OpenAIProvider } from "./providers/openai-provider.js";
 import type { LlmProvider } from "../orchestrator/types.js";
 
+export interface ProviderStatus {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface ProviderStatusSnapshot {
+  mock: ProviderStatus;
+  openai: ProviderStatus;
+  anthropic: ProviderStatus;
+}
+
 export function createProviderRegistry(env: NodeJS.ProcessEnv): Record<string, LlmProvider> {
   const providers: Record<string, LlmProvider> = {
     mock: new MockProvider(),
@@ -17,4 +28,18 @@ export function createProviderRegistry(env: NodeJS.ProcessEnv): Record<string, L
   }
 
   return providers;
+}
+
+export function getProviderStatusSnapshot(
+  env: NodeJS.ProcessEnv,
+): ProviderStatusSnapshot {
+  return {
+    mock: { available: true, reason: null },
+    openai: env.OPENAI_API_KEY
+      ? { available: true, reason: null }
+      : { available: false, reason: "OPENAI_API_KEY is not set." },
+    anthropic: env.ANTHROPIC_API_KEY
+      ? { available: true, reason: null }
+      : { available: false, reason: "ANTHROPIC_API_KEY is not set." },
+  };
 }

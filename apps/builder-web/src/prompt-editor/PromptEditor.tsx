@@ -9,9 +9,18 @@ import {
   DEFAULT_MODEL_POLICY,
   getDefaultModelForProvider,
   getModelPresetsForProvider,
+  type SupportedModelProvider,
 } from "../prompt-schema/model-policy.js";
 
-export function PromptEditor(): JSX.Element {
+interface ProviderStatusItem {
+  available: boolean;
+  reason: string | null;
+}
+
+export function PromptEditor(props: {
+  providerStatus?: Partial<Record<SupportedModelProvider, ProviderStatusItem>> | null;
+  providerStatusSummary?: string;
+}): JSX.Element {
   const selectedId = useBuilderStore((state) => state.selectedComponentId);
   const promptEditorFocusToken = useBuilderStore(
     (state) => state.promptEditorFocusToken,
@@ -23,6 +32,7 @@ export function PromptEditor(): JSX.Element {
   const selectedProvider = selected?.modelProvider ?? DEFAULT_MODEL_POLICY.provider;
   const selectedModelName = selected?.modelName ?? DEFAULT_MODEL_POLICY.model;
   const modelPresets = getModelPresetsForProvider(selectedProvider);
+  const selectedProviderStatus = props.providerStatus?.[selectedProvider];
   const editorRef = useRef<HTMLElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const variables = getPromptVariables(selected?.type === "Button" ? selected.id : undefined);
@@ -140,6 +150,18 @@ export function PromptEditor(): JSX.Element {
       )}
       <div>
         <div className="meta">Model policy:</div>
+        {props.providerStatusSummary && (
+          <p className="meta">{props.providerStatusSummary}</p>
+        )}
+        {selectedProviderStatus && !selectedProviderStatus.available && (
+          <div className="warning-box">
+            <div className="warning-title">Provider Not Ready</div>
+            <p className="warning-text">
+              {selectedProvider} is unavailable:{" "}
+              {selectedProviderStatus.reason ?? "Missing credentials."}
+            </p>
+          </div>
+        )}
         <div className="model-policy-grid">
           <label className="meta">
             Provider
