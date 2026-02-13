@@ -14,6 +14,7 @@ import { PromptEditor } from "./prompt-editor/PromptEditor.js";
 import {
   parseBuilderWorkspaceSnapshot,
   useBuilderStore,
+  type BuilderWorkspaceSnapshot,
   type BuilderComponentType,
 } from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
@@ -50,6 +51,8 @@ interface BuilderPreviewResponse {
 
 type CompileSource = "none" | "api" | "local";
 const AUTOSAVE_STORAGE_KEY = "form-first-builder.autosave.v1";
+const SNAPSHOT_HISTORY_STORAGE_KEY = "form-first-builder.snapshots.v1";
+const MAX_SNAPSHOT_HISTORY = 20;
 
 interface PersistedAutosaveV1 {
   kind: "form-first-builder-autosave-v1";
@@ -57,6 +60,19 @@ interface PersistedAutosaveV1 {
   workspace: unknown;
   previewStateDraft?: string;
   previewStateDirty?: boolean;
+}
+
+interface SnapshotEntry {
+  id: string;
+  savedAt: string;
+  workspace: BuilderWorkspaceSnapshot;
+  previewStateDraft: string;
+  previewStateDirty: boolean;
+}
+
+interface PersistedSnapshotHistoryV1 {
+  kind: "form-first-builder-snapshots-v1";
+  entries: SnapshotEntry[];
 }
 
 function getClientPoint(event: Event): { x: number; y: number } | null {
@@ -151,6 +167,49 @@ function parseAutosave(value: unknown): PersistedAutosaveV1 | null {
       ? { previewStateDirty: record.previewStateDirty }
       : {}),
   };
+}
+
+function parseSnapshotHistory(value: unknown): SnapshotEntry[] | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.kind !== "form-first-builder-snapshots-v1" ||
+    !Array.isArray(record.entries)
+  ) {
+    return null;
+  }
+
+  const entries: SnapshotEntry[] = [];
+  for (const entry of record.entries) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Record<string, unknown>;
+    if (typeof candidate.id !== "string" || typeof candidate.savedAt !== "string") {
+      continue;
+    }
+    const workspace = parseBuilderWorkspaceSnapshot(candidate.workspace);
+    if (!workspace) {
+      continue;
+    }
+    entries.push({
+      id: candidate.id,
+      savedAt: candidate.savedAt,
+      workspace,
+      previewStateDraft:
+        typeof candidate.previewStateDraft === "string"
+          ? candidate.previewStateDraft
+          : "{}",
+      previewStateDirty:
+        typeof candidate.previewStateDirty === "boolean"
+          ? candidate.previewStateDirty
+          : false,
+    });
+  }
+
+  return entries;
 }
 
 function downloadJsonFile(filename: string, payload: unknown): void {
@@ -276,6 +335,7 @@ export function App(): JSX.Element {
   const [previewStateDraft, setPreviewStateDraft] = useState("{}");
   const [autosaveReady, setAutosaveReady] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState("Autosave not initialized.");
+  const [snapshotHistory, setSnapshotHistory] = useState<SnapshotEntry[]>([]);
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -294,6 +354,16 @@ export function App(): JSX.Element {
   const defaultPreviewStateText = useMemo(
     () => JSON.stringify(buildPreviewState(schema), null, 2),
     [schema],
+  );
+
+  const currentWorkspace = useMemo<BuilderWorkspaceSnapshot>(
+    () => ({
+      appId,
+      version,
+      components,
+      connections,
+    }),
+    [appId, version, components, connections],
   );
 
   useEffect(() => {
@@ -339,6 +409,22 @@ export function App(): JSX.Element {
     }
   }, [loadWorkspaceSnapshot]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_HISTORY_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const entries = parseSnapshotHistory(JSON.parse(raw));
+      if (!entries) {
+        return;
+      }
+      setSnapshotHistory(entries);
+    } catch {
+      setSnapshotHistory([]);
+    }
+  }, []);
+
   const selectedPreviewEventId = useMemo(() => {
     const selectedButton = components.find(
       (component) =>
@@ -356,12 +442,7 @@ export function App(): JSX.Element {
       const payload: PersistedAutosaveV1 = {
         kind: "form-first-builder-autosave-v1",
         savedAt: new Date().toISOString(),
-        workspace: {
-          appId,
-          version,
-          components,
-          connections,
-        },
+        workspace: currentWorkspace,
         previewStateDraft,
         previewStateDirty,
       };
@@ -374,13 +455,64 @@ export function App(): JSX.Element {
     };
   }, [
     autosaveReady,
-    appId,
-    version,
-    components,
-    connections,
+    currentWorkspace,
     previewStateDraft,
     previewStateDirty,
   ]);
+
+  const persistSnapshotHistory = useCallback((entries: SnapshotEntry[]): void => {
+    const payload: PersistedSnapshotHistoryV1 = {
+      kind: "form-first-builder-snapshots-v1",
+      entries,
+    };
+    localStorage.setItem(SNAPSHOT_HISTORY_STORAGE_KEY, JSON.stringify(payload));
+  }, []);
+
+  const saveSnapshot = useCallback((): void => {
+    const nextEntry: SnapshotEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      savedAt: new Date().toISOString(),
+      workspace: currentWorkspace,
+      previewStateDraft,
+      previewStateDirty,
+    };
+
+    setSnapshotHistory((prev) => {
+      const next = [nextEntry, ...prev].slice(0, MAX_SNAPSHOT_HISTORY);
+      persistSnapshotHistory(next);
+      return next;
+    });
+    setAutosaveStatus(`Snapshot saved at ${nextEntry.savedAt}`);
+  }, [currentWorkspace, previewStateDraft, previewStateDirty, persistSnapshotHistory]);
+
+  const restoreSnapshot = useCallback(
+    (entry: SnapshotEntry): void => {
+      loadWorkspaceSnapshot(entry.workspace);
+      setPreviewStateDraft(entry.previewStateDraft);
+      setPreviewStateDirty(entry.previewStateDirty);
+      setPreviewOutput(null);
+      setPreviewSummary("No preview run yet.");
+      setCompileSummary(`Restored snapshot from ${entry.savedAt}.`);
+      setAutosaveStatus(`Snapshot restored (${entry.savedAt}).`);
+    },
+    [loadWorkspaceSnapshot],
+  );
+
+  const deleteSnapshot = useCallback(
+    (id: string): void => {
+      setSnapshotHistory((prev) => {
+        const next = prev.filter((entry) => entry.id !== id);
+        persistSnapshotHistory(next);
+        return next;
+      });
+    },
+    [persistSnapshotHistory],
+  );
+
+  const clearSnapshotHistory = useCallback((): void => {
+    setSnapshotHistory([]);
+    localStorage.removeItem(SNAPSHOT_HISTORY_STORAGE_KEY);
+  }, []);
 
   const compileNow = useCallback(async (): Promise<void> => {
     setCompileSummary("Compiling...");
@@ -656,6 +788,8 @@ export function App(): JSX.Element {
             >
               Clear Autosave
             </button>
+            <button onClick={saveSnapshot}>Save Snapshot</button>
+            <button onClick={clearSnapshotHistory}>Clear History</button>
           </div>
         </header>
         <p className="meta">{autosaveStatus}</p>
@@ -713,6 +847,27 @@ export function App(): JSX.Element {
           </div>
           <pre>{previewSummary}</pre>
           {previewOutput && <pre>{JSON.stringify(previewOutput, null, 2)}</pre>}
+        </section>
+
+        <section className="panel">
+          <h2>Snapshot History</h2>
+          {snapshotHistory.length === 0 ? (
+            <p className="meta">No saved snapshots yet.</p>
+          ) : (
+            <ul className="snapshot-list">
+              {snapshotHistory.map((entry) => (
+                <li key={entry.id} className="snapshot-item">
+                  <div className="snapshot-meta">
+                    <code>{entry.savedAt}</code>
+                  </div>
+                  <div className="snapshot-actions">
+                    <button onClick={() => restoreSnapshot(entry)}>Restore</button>
+                    <button onClick={() => deleteSnapshot(entry.id)}>Delete</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </main>
     </DndContext>
