@@ -122,6 +122,76 @@ describe("AppCompiler", () => {
     expect(result.diagnostics.some((item) => item.code === "UNKNOWN_PROMPT_VARIABLE")).toBe(true);
   });
 
+  it("returns diagnostics when prompt template tokens are not declared in variables", async () => {
+    const compiler = new AppCompiler();
+    const broken = {
+      ...validApp,
+      events: [
+        {
+          ...validApp.events[0],
+          actionGraph: {
+            ...validApp.events[0].actionGraph,
+            nodes: validApp.events[0].actionGraph.nodes.map((node) =>
+              node.kind === "PromptTask"
+                ? {
+                    ...node,
+                    promptSpec: {
+                      ...node.promptSpec,
+                      template: "Analyze {{customerComplaint}} and return JSON.",
+                      variables: [],
+                    },
+                  }
+                : node,
+            ),
+          },
+        },
+      ],
+    };
+
+    const result = await compiler.compile({
+      app: broken,
+      target: "node-fastify-react",
+    });
+
+    expect(result.files).toHaveLength(0);
+    expect(
+      result.diagnostics.some((item) => item.code === "PROMPT_TOKEN_NOT_DECLARED"),
+    ).toBe(true);
+  });
+
+  it("returns diagnostics for transform mapping into unknown state keys", async () => {
+    const compiler = new AppCompiler();
+    const broken = {
+      ...validApp,
+      events: [
+        {
+          ...validApp.events[0],
+          actionGraph: {
+            ...validApp.events[0].actionGraph,
+            nodes: validApp.events[0].actionGraph.nodes.map((node) =>
+              node.kind === "Transform"
+                ? {
+                    ...node,
+                    mapToState: { missingKey: "[$n2.output]" },
+                  }
+                : node,
+            ),
+          },
+        },
+      ],
+    };
+
+    const result = await compiler.compile({
+      app: broken,
+      target: "node-fastify-react",
+    });
+
+    expect(result.files).toHaveLength(0);
+    expect(
+      result.diagnostics.some((item) => item.code === "TRANSFORM_UNKNOWN_STATE_KEY"),
+    ).toBe(true);
+  });
+
   it("returns diagnostics for duplicate UI state keys", async () => {
     const compiler = new AppCompiler();
     const broken = {

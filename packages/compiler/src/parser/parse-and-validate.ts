@@ -41,6 +41,12 @@ function collectTemplateTokens(template: string): string[] {
   return tokens;
 }
 
+function parseNodeOutputReference(expression: string): string | null {
+  const match = expression.match(/^\[\$(.+?)\.output\]$/);
+  const nodeId = match?.[1]?.trim();
+  return nodeId && nodeId.length > 0 ? nodeId : null;
+}
+
 function validateGraph(event: EventDefinition, diagnostics: Diagnostic[]): void {
   const nodeIds = new Set<string>();
   for (const node of event.actionGraph.nodes) {
@@ -225,12 +231,55 @@ export function parseAndValidate(input: unknown): {
 
     validateGraph(event, diagnostics);
 
+    const nodeIds = new Set(event.actionGraph.nodes.map((node) => node.id));
+
     for (const node of event.actionGraph.nodes) {
+      if (node.kind === "Validate") {
+        for (const key of node.input.stateKeys) {
+          if (!stateKeys.has(key)) {
+            diagnostics.push({
+              code: "VALIDATE_UNKNOWN_STATE_KEY",
+              severity: "error",
+              path: `events.${event.id}.actionGraph.nodes.${node.id}.input.stateKeys`,
+              message: `Validate node '${node.id}' references unknown state key '${key}'.`,
+            });
+          }
+        }
+      }
+
       if (node.kind !== "PromptTask") {
+        if (node.kind === "Transform") {
+          for (const [targetKey, expression] of Object.entries(node.mapToState)) {
+            if (!stateKeys.has(targetKey)) {
+              diagnostics.push({
+                code: "TRANSFORM_UNKNOWN_STATE_KEY",
+                severity: "error",
+                path: `events.${event.id}.actionGraph.nodes.${node.id}.mapToState`,
+                message: `Transform node '${node.id}' maps into unknown state key '${targetKey}'.`,
+              });
+            }
+
+            const ref = parseNodeOutputReference(expression);
+            if (ref && !nodeIds.has(ref)) {
+              diagnostics.push({
+                code: "TRANSFORM_UNKNOWN_NODE_OUTPUT",
+                severity: "error",
+                path: `events.${event.id}.actionGraph.nodes.${node.id}.mapToState`,
+                message: `Transform node '${node.id}' references unknown node output '$${ref}.output'.`,
+              });
+            }
+          }
+        }
         continue;
       }
 
       const tokens = collectTemplateTokens(node.promptSpec.template);
+      const declared = new Set(
+        node.promptSpec.variables.map(
+          (variable) =>
+            aliases.get(variable) ?? aliases.get(normalizeKey(variable)) ?? variable,
+        ),
+      );
       for (const token of tokens) {
         const canonical = aliases.get(token) ?? aliases.get(normalizeKey(token)) ?? token;
         if (!stateKeys.has(canonical)) {
@@ -239,6 +288,16 @@ export function parseAndValidate(input: unknown): {
             severity: "error",
             path: `events.${event.id}.actionGraph.nodes.${node.id}.promptSpec.template`,
             message: `Prompt variable '{{${token}}}' does not map to a known state key.`,
+          });
+          continue;
+        }
+
+        if (!declared.has(canonical)) {
+          diagnostics.push({
+            code: "PROMPT_TOKEN_NOT_DECLARED",
+            severity: "error",
+            path: `events.${event.id}.actionGraph.nodes.${node.id}.promptSpec.variables`,
+            message: `Prompt template references state key '${canonical}' but it is missing from promptSpec.variables.`,
           });
         }
       }
