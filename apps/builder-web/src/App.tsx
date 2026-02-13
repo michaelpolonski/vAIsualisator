@@ -97,12 +97,11 @@ function buildDiagnosticFixKey(args: {
   diagnostic: CompileDiagnostic;
   fixLabel: string;
 }): string {
-  return [
-    args.diagnostic.code,
-    args.diagnostic.path ?? "",
-    args.diagnostic.message,
-    args.fixLabel,
-  ].join("::");
+  return `${buildDiagnosticRuleKey(args.diagnostic)}::${args.fixLabel}`;
+}
+
+function buildDiagnosticRuleKey(diagnostic: CompileDiagnostic): string {
+  return [diagnostic.code, diagnostic.path ?? "", diagnostic.message].join("::");
 }
 
 function buildBuilderGuardrailDiagnostics(args: {
@@ -168,6 +167,7 @@ function buildBuilderGuardrailDiagnostics(args: {
 type CompileSource = "none" | "api" | "local";
 const AUTOSAVE_STORAGE_KEY = "form-first-builder.autosave.v1";
 const SNAPSHOT_HISTORY_STORAGE_KEY = "form-first-builder.snapshots.v1";
+const MUTED_VALIDATION_RULES_STORAGE_KEY = "form-first-builder.validation-muted.v1";
 const MAX_SNAPSHOT_HISTORY = 20;
 
 interface PersistedAutosaveV1 {
@@ -373,6 +373,24 @@ function parseSnapshotHistory(value: unknown): SnapshotEntry[] | null {
   }
 
   return entries;
+}
+
+function parseMutedValidationRules(value: unknown): string[] | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.kind !== "form-first-builder-validation-muted-v1") {
+    return null;
+  }
+  if (!Array.isArray(record.rules)) {
+    return null;
+  }
+
+  return record.rules
+    .filter((item): item is string => typeof item === "string")
+    .filter((item) => item.length > 0);
 }
 
 function componentSignature(component: BuilderWorkspaceSnapshot["components"][number]): string {
@@ -605,6 +623,7 @@ export function App(): JSX.Element {
   const [validationDiagnostics, setValidationDiagnostics] = useState<
     CompileDiagnostic[]
   >([]);
+  const [mutedValidationRules, setMutedValidationRules] = useState<string[]>([]);
   const [lastFixUndoState, setLastFixUndoState] = useState<LastFixUndoState | null>(
     null,
   );
@@ -700,11 +719,15 @@ export function App(): JSX.Element {
             providerStatus,
           });
           const mergedDiagnostics = [...result.diagnostics, ...guardrailDiagnostics];
+          const mutedRuleSet = new Set(mutedValidationRules);
+          const visibleDiagnostics = mergedDiagnostics.filter(
+            (item) => !mutedRuleSet.has(buildDiagnosticRuleKey(item)),
+          );
           if (canceled) {
             return;
           }
-          setValidationDiagnostics(mergedDiagnostics);
-          setValidationSummary(buildValidationSummary(mergedDiagnostics));
+          setValidationDiagnostics(visibleDiagnostics);
+          setValidationSummary(buildValidationSummary(visibleDiagnostics));
           setValidationCheckedAtMs(Date.now());
         } catch (error) {
           if (canceled) {
@@ -723,7 +746,7 @@ export function App(): JSX.Element {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [components, connections, providerStatus, schema]);
+  }, [components, connections, mutedValidationRules, providerStatus, schema]);
 
   useEffect(() => {
     let canceled = false;
@@ -814,6 +837,30 @@ export function App(): JSX.Element {
       setSelectedSnapshotId(null);
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(MUTED_VALIDATION_RULES_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = parseMutedValidationRules(JSON.parse(raw));
+      if (!parsed) {
+        return;
+      }
+      setMutedValidationRules(parsed);
+    } catch {
+      setMutedValidationRules([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    const payload = {
+      kind: "form-first-builder-validation-muted-v1",
+      rules: mutedValidationRules,
+    };
+    localStorage.setItem(MUTED_VALIDATION_RULES_STORAGE_KEY, JSON.stringify(payload));
+  }, [mutedValidationRules]);
 
   const selectedPreviewEventId = useMemo(() => {
     const selectedButton = components.find(
@@ -1134,6 +1181,22 @@ export function App(): JSX.Element {
     setValidationFixStatus(`Undid fix: ${lastFixUndoState.label}`);
     setLastFixUndoState(null);
   }, [lastFixUndoState, loadWorkspaceSnapshot]);
+
+  const ignoreDiagnosticRule = useCallback((diagnostic: CompileDiagnostic): void => {
+    const rule = buildDiagnosticRuleKey(diagnostic);
+    setMutedValidationRules((prev) => {
+      if (prev.includes(rule)) {
+        return prev;
+      }
+      return [...prev, rule];
+    });
+    setValidationFixStatus(`Ignored diagnostic rule: ${diagnostic.code}`);
+  }, []);
+
+  const clearMutedValidationRules = useCallback((): void => {
+    setMutedValidationRules([]);
+    setValidationFixStatus("Cleared muted validation rules.");
+  }, []);
 
   const navigateToDiagnostic = useCallback(
     (diagnostic: CompileDiagnostic): void => {
@@ -1600,6 +1663,13 @@ export function App(): JSX.Element {
           <h2>Live Validation</h2>
           <div className="validation-toolbar">
             <button
+              className="validation-clear-muted"
+              onClick={clearMutedValidationRules}
+              disabled={mutedValidationRules.length === 0}
+            >
+              Clear Muted ({mutedValidationRules.length})
+            </button>
+            <button
               className="validation-apply-all"
               onClick={applyAllValidationFixes}
               disabled={availableValidationFixes.length === 0}
@@ -1642,6 +1712,12 @@ export function App(): JSX.Element {
                           disabled={!target}
                         >
                           Go to Canvas
+                        </button>
+                        <button
+                          className="validation-ignore"
+                          onClick={() => ignoreDiagnosticRule(diagnostic)}
+                        >
+                          Ignore
                         </button>
                         {fix && (
                           <button
