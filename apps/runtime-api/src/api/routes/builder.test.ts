@@ -82,6 +82,43 @@ describe("builder compile route", () => {
     await app.close();
   });
 
+  it("builds a deployable bundle when requested", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/builder/compile",
+      payload: {
+        app: defaultApp,
+        mode: "bundle",
+        includeFileContents: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      files: Array<{ path: string; bytes: number }>;
+      fileContents: Array<{ path: string; content: string }>;
+    };
+
+    expect(body.files.length).toBeGreaterThan(10);
+    expect(body.fileContents.length).toBe(body.files.length);
+    expect(body.fileContents.some((f) => f.path.endsWith("/package.json"))).toBe(true);
+    expect(
+      body.fileContents.some((f) =>
+        f.path.endsWith("/apps/runtime-api/src/generated/app-definition.ts"),
+      ),
+    ).toBe(true);
+    expect(
+      body.fileContents.some((f) =>
+        f.path.endsWith("/apps/runtime-web/src/generated/ui-schema.ts"),
+      ),
+    ).toBe(true);
+
+    await app.close();
+  });
+
   it("executes preview event and returns state patch/logs", async () => {
     const app = Fastify();
     await registerBuilderRoutes(app);

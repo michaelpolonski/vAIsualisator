@@ -577,6 +577,7 @@ function downloadJsonFile(filename: string, payload: unknown): void {
 async function compileViaApi(args: {
   app: AppDefinition;
   includeFileContents?: boolean;
+  mode?: "overlay" | "bundle";
 }): Promise<BuilderCompileResponse> {
   const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
   const response = await fetch(`${apiBase}/builder/compile`, {
@@ -585,6 +586,7 @@ async function compileViaApi(args: {
     body: JSON.stringify({
       app: args.app,
       target: "node-fastify-react",
+      mode: args.mode ?? "overlay",
       includeFileContents: args.includeFileContents ?? false,
     }),
   });
@@ -1614,6 +1616,7 @@ export function App(): JSX.Element {
       const apiResult = await compileViaApi({
         app: schema,
         includeFileContents: true,
+        mode: "overlay",
       });
       const diagnosticsText = formatDiagnostics(apiResult.diagnostics);
 
@@ -1727,6 +1730,58 @@ export function App(): JSX.Element {
     showValidationErrors,
     showValidationWarnings,
   ]);
+
+  const exportDeployableBundle = useCallback(async (): Promise<void> => {
+    setCompileSummary("Exporting deployable bundle...");
+
+    try {
+      const apiResult = await compileViaApi({
+        app: schema,
+        includeFileContents: true,
+        mode: "bundle",
+      });
+      const diagnosticsText = formatDiagnostics(apiResult.diagnostics);
+
+      setCompileSource("api");
+      setCompileFiles(apiResult.files);
+
+      if (apiResult.diagnostics.some((item) => item.severity === "error")) {
+        setCompileSummary(
+          `Cannot export deployable bundle due to compile errors:\n${diagnosticsText}`,
+        );
+        return;
+      }
+
+      if (!apiResult.fileContents || apiResult.fileContents.length === 0) {
+        setCompileSummary(
+          "Compile succeeded but no file contents were returned for deployable bundle export.",
+        );
+        return;
+      }
+
+      downloadJsonFile(`${schema.appId}-deployable-bundle.json`, {
+        appId: schema.appId,
+        version: schema.version,
+        appDefinition: schema,
+        target: "node-fastify-react",
+        mode: "bundle",
+        source: "api",
+        generatedAt: apiResult.generatedAt,
+        docker: apiResult.docker,
+        diagnostics: apiResult.diagnostics,
+        files: apiResult.fileContents,
+      });
+
+      const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
+      setCompileSummary(
+        `Exported deployable bundle with ${apiResult.fileContents.length} files via API.${warningSuffix}`,
+      );
+    } catch (error) {
+      setCompileSummary(
+        `Export deployable bundle failed: ${(error as Error).message}. Ensure runtime API is running.`,
+      );
+    }
+  }, [schema]);
 
   const importBundle = useCallback(
     async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
@@ -1940,6 +1995,9 @@ export function App(): JSX.Element {
               Preview Runtime
             </button>
             <button onClick={() => void exportBundle()}>Export Bundle</button>
+            <button onClick={() => void exportDeployableBundle()}>
+              Export Deployable Bundle
+            </button>
             <label className="import-label">
               Import Bundle
               <input
