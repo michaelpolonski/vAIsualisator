@@ -238,6 +238,19 @@ function getClientPoint(event: Event): { x: number; y: number } | null {
   return null;
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName.toLowerCase();
+  return (
+    tag === "input" ||
+    tag === "textarea" ||
+    tag === "select" ||
+    target.isContentEditable
+  );
+}
+
 function formatDiagnostics(diagnostics: CompileDiagnostic[]): string {
   if (diagnostics.length === 0) {
     return "";
@@ -1745,6 +1758,33 @@ export function App(): JSX.Element {
     };
   }, [compileNow]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.altKey || !event.shiftKey) {
+        return;
+      }
+      if (isEditableKeyboardTarget(event.target)) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === "f") {
+        event.preventDefault();
+        applyAllValidationFixes();
+        return;
+      }
+      if (key === "z") {
+        event.preventDefault();
+        undoLastFix();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [applyAllValidationFixes, undoLastFix]);
+
   function onDragEnd(event: DragEndEvent): void {
     if (event.over?.id !== "builder-canvas") {
       return;
@@ -1909,6 +1949,7 @@ export function App(): JSX.Element {
             </button>
           </div>
           <p className="meta">{validationSummary}</p>
+          <p className="meta">Shortcuts: Alt+Shift+F apply all fixes, Alt+Shift+Z undo last fix.</p>
           <p className="meta">
             Total diagnostics: {allValidationDiagnostics.length}. Visible:{" "}
             {validationDiagnostics.length}. Muted rules: {mutedValidationRules.length}.
