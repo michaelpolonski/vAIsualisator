@@ -43,6 +43,7 @@ pnpm install
 ## Run builder + runtime
 
 ```bash
+# Builds shared workspace packages first (contracts/compiler) via Turbo task dependencies.
 pnpm --filter @form-builder/builder-web dev
 pnpm --filter @form-builder/runtime-api dev
 pnpm --filter @form-builder/runtime-web dev
