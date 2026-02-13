@@ -41,6 +41,8 @@ WORKDIR /app
 COPY . .
 RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
 RUN pnpm install --frozen-lockfile=false
+RUN pnpm --filter @form-builder/contracts build
+RUN pnpm --filter @form-builder/compiler build
 RUN pnpm --filter @form-builder/runtime-api build
 RUN pnpm --filter @form-builder/runtime-web build
 EXPOSE 3000
