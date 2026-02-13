@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AppDefinition } from "@form-builder/contracts";
 
 export type BuilderComponentType = "TextArea" | "Button" | "DataTable";
 export interface BuilderPosition {
@@ -37,6 +38,7 @@ interface BuilderState {
   moveComponent: (id: string, position: BuilderPosition) => void;
   addConnection: (sourceId: string, targetId: string) => void;
   removeConnection: (connectionId: string) => void;
+  loadFromAppDefinition: (app: AppDefinition) => void;
 }
 
 let seq = 0;
@@ -93,6 +95,135 @@ function getComponentById(
   id: string,
 ): BuilderComponent | undefined {
   return components.find((component) => component.id === id);
+}
+
+function dedupeConnections(connections: BuilderConnection[]): BuilderConnection[] {
+  const seen = new Set<string>();
+  const deduped: BuilderConnection[] = [];
+
+  for (const connection of connections) {
+    const key = `${connection.sourceId}::${connection.targetId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(connection);
+  }
+
+  return deduped;
+}
+
+function buildBuilderFromAppDefinition(app: AppDefinition): {
+  components: BuilderComponent[];
+  connections: BuilderConnection[];
+} {
+  const components: BuilderComponent[] = app.ui.components.map((component, index) => {
+    if (component.type === "TextArea") {
+      return {
+        id: component.id,
+        type: "TextArea",
+        label: component.label,
+        position: nextPosition(index),
+        stateKey: component.stateKey,
+      };
+    }
+
+    if (component.type === "Button") {
+      return {
+        id: component.id,
+        type: "Button",
+        label: component.label,
+        position: nextPosition(index),
+        eventId: component.events.onClick ?? `evt_${component.id}_click`,
+        promptTemplate: "",
+      };
+    }
+
+    return {
+      id: component.id,
+      type: "DataTable",
+      label: component.label,
+      position: nextPosition(index),
+      dataKey: component.dataKey,
+    };
+  });
+
+  const componentsById = new Map(components.map((component) => [component.id, component]));
+  const textAreasByStateKey = new Map(
+    components
+      .filter((component) => component.type === "TextArea")
+      .map((component) => [component.stateKey ?? "", component.id]),
+  );
+  const dataTablesByDataKey = new Map(
+    components
+      .filter((component) => component.type === "DataTable")
+      .map((component) => [component.dataKey ?? "", component.id]),
+  );
+
+  const connections: BuilderConnection[] = [];
+
+  for (const event of app.events) {
+    const button = componentsById.get(event.trigger.componentId);
+    if (!button || button.type !== "Button") {
+      continue;
+    }
+
+    button.eventId = event.id;
+    const promptNode = event.actionGraph.nodes.find((node) => node.kind === "PromptTask");
+    if (promptNode && promptNode.kind === "PromptTask") {
+      button.promptTemplate = promptNode.promptSpec.template;
+    }
+
+    const inputStateKeys = new Set<string>();
+    const outputStateKeys = new Set<string>();
+
+    for (const node of event.actionGraph.nodes) {
+      if (node.kind === "Validate") {
+        for (const key of node.input.stateKeys) {
+          inputStateKeys.add(key);
+        }
+      }
+      if (node.kind === "PromptTask") {
+        for (const key of node.promptSpec.variables) {
+          inputStateKeys.add(key);
+        }
+      }
+      if (node.kind === "Transform") {
+        for (const key of Object.keys(node.mapToState)) {
+          outputStateKeys.add(key);
+        }
+      }
+    }
+
+    for (const stateKey of inputStateKeys) {
+      const sourceId = textAreasByStateKey.get(stateKey);
+      if (!sourceId) {
+        continue;
+      }
+      connections.push({
+        id: `conn_${sourceId}_${button.id}`,
+        sourceId,
+        targetId: button.id,
+      });
+    }
+
+    for (const stateKey of outputStateKeys) {
+      const targetId = dataTablesByDataKey.get(stateKey);
+      if (!targetId) {
+        continue;
+      }
+      connections.push({
+        id: `conn_${button.id}_${targetId}`,
+        sourceId: button.id,
+        targetId,
+      });
+    }
+  }
+
+  return {
+    components,
+    connections: dedupeConnections(connections),
+  };
 }
 
 export function canConnectComponents(args: {
@@ -403,6 +534,18 @@ export const useBuilderStore = create<BuilderState>((set) => ({
         (connection) => connection.id !== connectionId,
       ),
     })),
+  loadFromAppDefinition: (app) => {
+    const next = buildBuilderFromAppDefinition(app);
+    seq = Math.max(seq, next.components.length);
+    set({
+      appId: app.appId,
+      version: app.version,
+      components: next.components,
+      connections: next.connections,
+      selectedComponentId: undefined,
+      promptEditorFocusToken: 0,
+    });
+  },
 }));
 
 export function getPromptVariables(buttonId?: string): string[] {

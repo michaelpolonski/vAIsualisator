@@ -27,6 +27,21 @@ body {
   gap: 8px;
 }
 
+.import-label {
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.import-input {
+  display: none;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 250px 1fr 320px;

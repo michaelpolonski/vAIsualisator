@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { AppCompiler } from "@form-builder/compiler";
-import type { AppDefinition } from "@form-builder/contracts";
+import { AppDefinitionSchema, type AppDefinition } from "@form-builder/contracts";
 import { Palette } from "./palette/Palette.js";
 import { Canvas } from "./canvas/Canvas.js";
 import { PromptEditor } from "./prompt-editor/PromptEditor.js";
@@ -148,12 +148,16 @@ export function App(): JSX.Element {
   const components = useBuilderStore((state) => state.components);
   const connections = useBuilderStore((state) => state.connections);
   const addComponent = useBuilderStore((state) => state.addComponent);
+  const loadFromAppDefinition = useBuilderStore(
+    (state) => state.loadFromAppDefinition,
+  );
 
   const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
   const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
   const [compileSource, setCompileSource] = useState<CompileSource>("none");
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
+  const [fileInputKey, setFileInputKey] = useState(0);
 
   const schema = useMemo(
     () =>
@@ -235,6 +239,7 @@ export function App(): JSX.Element {
       downloadJsonFile(`${schema.appId}-bundle.json`, {
         appId: schema.appId,
         version: schema.version,
+        appDefinition: schema,
         target: "node-fastify-react",
         source: "api",
         generatedAt: apiResult.generatedAt,
@@ -272,6 +277,7 @@ export function App(): JSX.Element {
       downloadJsonFile(`${schema.appId}-bundle.json`, {
         appId: schema.appId,
         version: schema.version,
+        appDefinition: schema,
         target: "node-fastify-react",
         source: "local",
         generatedAt: localResult.generatedAt,
@@ -286,6 +292,47 @@ export function App(): JSX.Element {
       );
     }
   }, [schema]);
+
+  const importBundle = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text) as unknown;
+        const candidate =
+          typeof payload === "object" && payload !== null
+            ? ((payload as Record<string, unknown>).appDefinition ??
+              (payload as Record<string, unknown>).app ??
+              payload)
+            : payload;
+
+        const parsed = AppDefinitionSchema.safeParse(candidate);
+        if (!parsed.success) {
+          const message = parsed.error.issues
+            .map((issue) => issue.message)
+            .join("; ");
+          setCompileSummary(`Import failed: ${message}`);
+          return;
+        }
+
+        loadFromAppDefinition(parsed.data);
+        setCompileSource("none");
+        setCompileFiles([]);
+        setCompileSummary(
+          `Imported app '${parsed.data.appId}' from bundle (${file.name}).`,
+        );
+      } catch (error) {
+        setCompileSummary(`Import failed: ${(error as Error).message}`);
+      } finally {
+        setFileInputKey((value) => value + 1);
+      }
+    },
+    [loadFromAppDefinition],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -343,6 +390,16 @@ export function App(): JSX.Element {
           <div className="header-actions">
             <button onClick={() => void compileNow()}>Run / Deploy (F5)</button>
             <button onClick={() => void exportBundle()}>Export Bundle</button>
+            <label className="import-label">
+              Import Bundle
+              <input
+                key={fileInputKey}
+                type="file"
+                accept="application/json"
+                className="import-input"
+                onChange={(event) => void importBundle(event)}
+              />
+            </label>
           </div>
         </header>
 
