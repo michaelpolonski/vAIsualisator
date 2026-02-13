@@ -7,17 +7,28 @@ const SUPPORTED_MODEL_PROVIDERS: SupportedModelProvider[] = [
 ];
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<SupportedModelProvider, string> = {
-  openai: "gpt-4o-mini",
-  anthropic: "claude-3-5-haiku-latest",
+  openai: "gpt-5-mini",
+  anthropic: "claude-sonnet-4-0",
   mock: "mock-v1",
 };
 
 const MODEL_PRESETS_BY_PROVIDER: Record<SupportedModelProvider, string[]> = {
-  openai: ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1", "o3-mini"],
+  openai: [
+    "gpt-5-mini",
+    "gpt-5",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o-mini",
+    "o3",
+    "o3-mini",
+  ],
   anthropic: [
-    "claude-3-5-haiku-latest",
+    "claude-opus-4-1",
+    "claude-opus-4-0",
+    "claude-sonnet-4-0",
     "claude-3-7-sonnet-latest",
-    "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-latest",
   ],
   mock: ["mock-v1"],
 };
