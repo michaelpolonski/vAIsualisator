@@ -17,15 +17,24 @@ export interface BuilderComponent {
   promptTemplate?: string;
 }
 
+export interface BuilderConnection {
+  id: string;
+  sourceId: string;
+  targetId: string;
+}
+
 interface BuilderState {
   appId: string;
   version: string;
   components: BuilderComponent[];
+  connections: BuilderConnection[];
   selectedComponentId: string | undefined;
   addComponent: (type: BuilderComponentType, position?: BuilderPosition) => void;
   selectComponent: (id?: string) => void;
   updateComponent: (id: string, patch: Partial<BuilderComponent>) => void;
   moveComponent: (id: string, position: BuilderPosition) => void;
+  addConnection: (sourceId: string, targetId: string) => void;
+  removeConnection: (connectionId: string) => void;
 }
 
 let seq = 0;
@@ -60,6 +69,39 @@ function nextPosition(index: number): BuilderPosition {
   };
 }
 
+function getComponentById(
+  components: BuilderComponent[],
+  id: string,
+): BuilderComponent | undefined {
+  return components.find((component) => component.id === id);
+}
+
+export function canConnectComponents(args: {
+  components: BuilderComponent[];
+  sourceId: string;
+  targetId: string;
+}): boolean {
+  if (args.sourceId === args.targetId) {
+    return false;
+  }
+
+  const source = getComponentById(args.components, args.sourceId);
+  const target = getComponentById(args.components, args.targetId);
+  if (!source || !target) {
+    return false;
+  }
+
+  if (source.type === "TextArea" && target.type === "Button") {
+    return true;
+  }
+
+  if (source.type === "Button" && target.type === "DataTable") {
+    return true;
+  }
+
+  return false;
+}
+
 export const useBuilderStore = create<BuilderState>((set) => ({
   appId: "app_customer_support_v1",
   version: "1.0.0",
@@ -87,6 +129,18 @@ export const useBuilderStore = create<BuilderState>((set) => ({
       label: "Analysis Result",
       position: { x: 350, y: 180 },
       dataKey: "analysisRows",
+    },
+  ],
+  connections: [
+    {
+      id: "conn_input_to_btn",
+      sourceId: "input_customer_complaint",
+      targetId: "btn_analyze",
+    },
+    {
+      id: "conn_btn_to_table",
+      sourceId: "btn_analyze",
+      targetId: "table_results",
     },
   ],
   addComponent: (type, position) => {
@@ -177,13 +231,82 @@ export const useBuilderStore = create<BuilderState>((set) => ({
           : item,
       ),
     })),
+  addConnection: (sourceId, targetId) =>
+    set((state) => {
+      if (
+        !canConnectComponents({
+          components: state.components,
+          sourceId,
+          targetId,
+        })
+      ) {
+        return {};
+      }
+
+      const duplicate = state.connections.some(
+        (connection) =>
+          connection.sourceId === sourceId && connection.targetId === targetId,
+      );
+      if (duplicate) {
+        return {};
+      }
+
+      const source = getComponentById(state.components, sourceId);
+      const target = getComponentById(state.components, targetId);
+      if (!source || !target) {
+        return {};
+      }
+
+      let nextConnections = state.connections;
+
+      if (source.type === "Button" && target.type === "DataTable") {
+        nextConnections = nextConnections.filter(
+          (connection) =>
+            !(connection.sourceId === sourceId &&
+              getComponentById(state.components, connection.targetId)?.type ===
+                "DataTable"),
+        );
+      }
+
+      return {
+        connections: [
+          ...nextConnections,
+          {
+            id: `conn_${sourceId}_${targetId}`,
+            sourceId,
+            targetId,
+          },
+        ],
+      };
+    }),
+  removeConnection: (connectionId) =>
+    set((state) => ({
+      connections: state.connections.filter(
+        (connection) => connection.id !== connectionId,
+      ),
+    })),
 }));
 
-export function getPromptVariables(): string[] {
-  return getStateSnapshot()
-    .components.filter((component) => component.type === "TextArea")
+export function getPromptVariables(buttonId?: string): string[] {
+  const state = getStateSnapshot();
+  const allInputKeys = state.components
+    .filter((component) => component.type === "TextArea")
     .map((component) => component.stateKey ?? "")
     .filter(Boolean);
+
+  if (!buttonId) {
+    return allInputKeys;
+  }
+
+  const connectedInputKeys = state.connections
+    .filter((connection) => connection.targetId === buttonId)
+    .map((connection) => getComponentById(state.components, connection.sourceId))
+    .filter((component): component is BuilderComponent => !!component)
+    .filter((component) => component.type === "TextArea")
+    .map((component) => component.stateKey ?? "")
+    .filter(Boolean);
+
+  return connectedInputKeys.length > 0 ? connectedInputKeys : allInputKeys;
 }
 
 export function getStateSnapshot(): BuilderState {

@@ -6,7 +6,7 @@ export function PromptEditor(): JSX.Element {
   const update = useBuilderStore((state) => state.updateComponent);
 
   const selected = components.find((item) => item.id === selectedId);
-  const variables = getPromptVariables();
+  const variables = getPromptVariables(selected?.type === "Button" ? selected.id : undefined);
 
   if (!selected || selected.type !== "Button") {
     return (

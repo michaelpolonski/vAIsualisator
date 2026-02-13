@@ -1,5 +1,8 @@
 import type { AppDefinition } from "@form-builder/contracts";
-import type { BuilderComponent } from "../state/builder-store.js";
+import type {
+  BuilderComponent,
+  BuilderConnection,
+} from "../state/builder-store.js";
 
 function buildStateModel(components: BuilderComponent[]): AppDefinition["stateModel"] {
   const stateModel: AppDefinition["stateModel"] = {};
@@ -33,12 +36,15 @@ export function toAppDefinition(args: {
   appId: string;
   version: string;
   components: BuilderComponent[];
+  connections: BuilderConnection[];
 }): AppDefinition {
-  const { appId, version, components } = args;
+  const { appId, version, components, connections } = args;
   const uiComponents: AppDefinition["ui"]["components"] = [];
   const events: AppDefinition["events"] = [];
-  const firstDataTable = components.find((component) => component.type === "DataTable");
-  const outputDataKey = firstDataTable?.dataKey ?? "analysisRows";
+  const firstDataTable = components.find(
+    (component) => component.type === "DataTable",
+  );
+  const componentById = new Map(components.map((item) => [item.id, item]));
 
   for (const component of components) {
     if (component.type === "TextArea") {
@@ -53,6 +59,28 @@ export function toAppDefinition(args: {
 
     if (component.type === "Button") {
       const eventId = component.eventId ?? `evt_${component.id}_click`;
+      const connectedInputs = connections
+        .filter((connection) => connection.targetId === component.id)
+        .map((connection) => componentById.get(connection.sourceId))
+        .filter((item): item is BuilderComponent => !!item)
+        .filter((item) => item.type === "TextArea")
+        .map((item) => item.stateKey ?? "")
+        .filter(Boolean);
+      const inputStateKeys =
+        connectedInputs.length > 0
+          ? connectedInputs
+          : components
+              .filter((item) => item.type === "TextArea")
+              .map((item) => item.stateKey ?? "")
+              .filter(Boolean);
+
+      const outputConnection = connections
+        .filter((connection) => connection.sourceId === component.id)
+        .map((connection) => componentById.get(connection.targetId))
+        .find((item): item is BuilderComponent => !!item && item.type === "DataTable");
+      const outputDataKey =
+        outputConnection?.dataKey ?? firstDataTable?.dataKey ?? "analysisRows";
+
       uiComponents.push({
         id: component.id,
         type: "Button",
@@ -69,10 +97,7 @@ export function toAppDefinition(args: {
               id: `${eventId}_validate`,
               kind: "Validate",
               input: {
-                stateKeys: components
-                  .filter((item) => item.type === "TextArea")
-                  .map((item) => item.stateKey ?? "")
-                  .filter(Boolean),
+                stateKeys: inputStateKeys,
               },
             },
             {
@@ -83,10 +108,7 @@ export function toAppDefinition(args: {
                   component.promptTemplate && component.promptTemplate.length > 0
                     ? component.promptTemplate
                     : "Analyze {{customerComplaint}} and return sentiment and reply.",
-                variables: components
-                  .filter((item) => item.type === "TextArea")
-                  .map((item) => item.stateKey ?? "")
-                  .filter(Boolean),
+                variables: inputStateKeys,
                 modelPolicy: {
                   provider: "mock",
                   model: "mock-v1",
@@ -141,7 +163,7 @@ export function toAppDefinition(args: {
       ...(components.some((component) => component.type === "DataTable")
         ? {}
         : {
-            [outputDataKey]: {
+            [firstDataTable?.dataKey ?? "analysisRows"]: {
               type: "array" as const,
               items: {
                 type: "object" as const,

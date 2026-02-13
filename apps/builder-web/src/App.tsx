@@ -28,6 +28,7 @@ export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
   const components = useBuilderStore((state) => state.components);
+  const connections = useBuilderStore((state) => state.connections);
   const addComponent = useBuilderStore((state) => state.addComponent);
 
   const [compileSummary, setCompileSummary] = useState<string>("");
@@ -40,8 +41,9 @@ export function App(): JSX.Element {
         appId,
         version,
         components,
+        connections,
       }),
-    [appId, version, components],
+    [appId, version, components, connections],
   );
 
   async function compileNow(): Promise<void> {

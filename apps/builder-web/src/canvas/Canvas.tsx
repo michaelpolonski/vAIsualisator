@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import {
+  MarkerType,
   Background,
   Controls,
   Handle,
   Position,
   ReactFlow,
+  type Connection,
+  type Edge,
   type Node,
   type NodeProps,
 } from "reactflow";
-import { useBuilderStore, type BuilderComponent } from "../state/builder-store.js";
+import {
+  canConnectComponents,
+  useBuilderStore,
+  type BuilderComponent,
+} from "../state/builder-store.js";
 import "reactflow/dist/style.css";
 
 interface BuilderNodeData {
@@ -59,6 +66,9 @@ export function Canvas(props: {
   const selectComponent = useBuilderStore((state) => state.selectComponent);
   const updateComponent = useBuilderStore((state) => state.updateComponent);
   const moveComponent = useBuilderStore((state) => state.moveComponent);
+  const connections = useBuilderStore((state) => state.connections);
+  const addConnection = useBuilderStore((state) => state.addConnection);
+  const removeConnection = useBuilderStore((state) => state.removeConnection);
 
   const { setNodeRef, isOver } = useDroppable({ id: "builder-canvas" });
 
@@ -92,13 +102,42 @@ export function Canvas(props: {
     [components, selectedId, selectComponent, updateComponent],
   );
 
+  const edges: Array<Edge> = useMemo(
+    () =>
+      connections.map((connection) => ({
+        id: connection.id,
+        source: connection.sourceId,
+        target: connection.targetId,
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      })),
+    [connections],
+  );
+
+  const isValidConnection = useCallback(
+    (connection: Connection): boolean => {
+      const source = connection.source;
+      const target = connection.target;
+      if (!source || !target) {
+        return false;
+      }
+
+      return canConnectComponents({
+        components,
+        sourceId: source,
+        targetId: target,
+      });
+    },
+    [components],
+  );
+
   return (
     <section ref={setCanvasRef} className={`panel canvas ${isOver ? "canvas-drop-over" : ""}`}>
       <h2>Canvas</h2>
       <div className="canvas-flow-wrap">
         <ReactFlow
           nodes={nodes}
-          edges={[]}
+          edges={edges}
           nodeTypes={nodeTypes}
           fitView
           onNodeDragStop={(_event, node) => {
@@ -108,6 +147,19 @@ export function Canvas(props: {
             selectComponent(node.id);
           }}
           onPaneClick={() => selectComponent(undefined)}
+          onConnect={(connection) => {
+            if (!connection.source || !connection.target) {
+              return;
+            }
+            addConnection(connection.source, connection.target);
+          }}
+          onEdgesDelete={(deletedEdges) => {
+            for (const edge of deletedEdges) {
+              removeConnection(edge.id);
+            }
+          }}
+          isValidConnection={isValidConnection}
+          deleteKeyCode={["Backspace", "Delete"]}
         >
           <Background gap={18} size={1} />
           <Controls />
