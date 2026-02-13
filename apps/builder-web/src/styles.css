@@ -179,6 +179,14 @@ pre {
   max-height: 250px;
 }
 
+.file-list {
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
 @media (max-width: 1024px) {
   .workspace {
     grid-template-columns: 1fr;

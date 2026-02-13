@@ -66,6 +66,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.39.0
         version: 0.39.0
+      '@form-builder/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
       '@form-builder/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

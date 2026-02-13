@@ -1,12 +1,31 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { AppCompiler } from "@form-builder/compiler";
+import type { AppDefinition } from "@form-builder/contracts";
 import { Palette } from "./palette/Palette.js";
 import { Canvas } from "./canvas/Canvas.js";
 import { PromptEditor } from "./prompt-editor/PromptEditor.js";
 import { useBuilderStore, type BuilderComponentType } from "./state/builder-store.js";
 import { toAppDefinition } from "./serializer/to-app-definition.js";
 import "./styles.css";
+
+interface CompileDiagnostic {
+  code: string;
+  message: string;
+  severity: "error" | "warning";
+}
+
+interface CompileFileMeta {
+  path: string;
+  bytes: number;
+}
+
+interface BuilderCompileResponse {
+  diagnostics: CompileDiagnostic[];
+  docker: { imageName: string; tags: string[] };
+  files: CompileFileMeta[];
+  generatedAt: string;
+}
 
 function getClientPoint(event: Event): { x: number; y: number } | null {
   if (event instanceof MouseEvent || event instanceof PointerEvent) {
@@ -24,6 +43,44 @@ function getClientPoint(event: Event): { x: number; y: number } | null {
   return null;
 }
 
+function formatDiagnostics(diagnostics: CompileDiagnostic[]): string {
+  if (diagnostics.length === 0) {
+    return "";
+  }
+
+  return diagnostics
+    .map((item) => `${item.severity.toUpperCase()} ${item.code}: ${item.message}`)
+    .join("\n");
+}
+
+async function compileViaApi(app: AppDefinition): Promise<BuilderCompileResponse> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/compile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      app,
+      target: "node-fastify-react",
+    }),
+  });
+
+  const body = (await response.json()) as
+    | BuilderCompileResponse
+    | { error?: string; message?: string };
+
+  if (!response.ok) {
+    const message =
+      "message" in body && body.message
+        ? body.message
+        : "error" in body && body.error
+          ? body.error
+          : "Compile API failed";
+    throw new Error(message);
+  }
+
+  return body as BuilderCompileResponse;
+}
+
 export function App(): JSX.Element {
   const appId = useBuilderStore((state) => state.appId);
   const version = useBuilderStore((state) => state.version);
@@ -31,7 +88,9 @@ export function App(): JSX.Element {
   const connections = useBuilderStore((state) => state.connections);
   const addComponent = useBuilderStore((state) => state.addComponent);
 
-  const [compileSummary, setCompileSummary] = useState<string>("");
+  const [compileSummary, setCompileSummary] = useState<string>("No compile run yet.");
+  const [compileFiles, setCompileFiles] = useState<CompileFileMeta[]>([]);
+  const [compileSource, setCompileSource] = useState<"none" | "api" | "local">("none");
   const [canvasElement, setCanvasElement] = useState<HTMLElement | null>(null);
   const sensors = useSensors(useSensor(PointerSensor));
 
@@ -46,25 +105,68 @@ export function App(): JSX.Element {
     [appId, version, components, connections],
   );
 
-  async function compileNow(): Promise<void> {
-    const compiler = new AppCompiler();
-    const result = await compiler.compile({
-      app: schema,
-      target: "node-fastify-react",
-    });
+  const compileNow = useCallback(async (): Promise<void> => {
+    setCompileSummary("Compiling...");
 
-    if (result.diagnostics.length > 0) {
-      const message = result.diagnostics
-        .map((item) => `${item.severity.toUpperCase()} ${item.code}: ${item.message}`)
-        .join("\n");
-      setCompileSummary(message);
+    try {
+      const apiResult = await compileViaApi(schema);
+      const diagnosticsText = formatDiagnostics(apiResult.diagnostics);
+      setCompileFiles(apiResult.files);
+      setCompileSource("api");
+
+      if (apiResult.diagnostics.some((item) => item.severity === "error")) {
+        setCompileSummary(diagnosticsText);
+        return;
+      }
+
+      const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
+      setCompileSummary(
+        `Compiled ${apiResult.files.length} artifacts via API. Docker image: ${apiResult.docker.imageName}:latest${warningSuffix}`,
+      );
       return;
-    }
+    } catch (apiError) {
+      const compiler = new AppCompiler();
+      const localResult = await compiler.compile({
+        app: schema,
+        target: "node-fastify-react",
+      });
+      const diagnosticsText = formatDiagnostics(localResult.diagnostics);
+      const localFiles: CompileFileMeta[] = localResult.files.map((file) => ({
+        path: file.path,
+        bytes: new TextEncoder().encode(file.content).length,
+      }));
 
-    setCompileSummary(
-      `Compiled ${result.files.length} artifacts. Docker image: ${result.docker.imageName}:latest`,
-    );
-  }
+      setCompileFiles(localFiles);
+      setCompileSource("local");
+
+      if (localResult.diagnostics.some((item) => item.severity === "error")) {
+        setCompileSummary(
+          `Compile API unavailable (${(apiError as Error).message}). Local compile diagnostics:\n${diagnosticsText}`,
+        );
+        return;
+      }
+
+      const warningSuffix = diagnosticsText ? `\n${diagnosticsText}` : "";
+      setCompileSummary(
+        `Compiled ${localResult.files.length} artifacts locally (API fallback: ${(apiError as Error).message}). Docker image: ${localResult.docker.imageName}:latest${warningSuffix}`,
+      );
+    }
+  }, [schema]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "F5") {
+        return;
+      }
+      event.preventDefault();
+      void compileNow();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [compileNow]);
 
   function onDragEnd(event: DragEndEvent): void {
     if (event.over?.id !== "builder-canvas") {
@@ -118,11 +220,21 @@ export function App(): JSX.Element {
           <pre>{JSON.stringify(schema, null, 2)}</pre>
         </section>
 
-        <section className="panel">
-          <h2>Compilation Output</h2>
-          <pre>{compileSummary || "No compile run yet."}</pre>
-        </section>
-      </main>
-    </DndContext>
+      <section className="panel">
+        <h2>Compilation Output</h2>
+        <p className="meta">Source: {compileSource}</p>
+        <pre>{compileSummary || "No compile run yet."}</pre>
+        {compileFiles.length > 0 && (
+          <ul className="file-list">
+            {compileFiles.map((file) => (
+              <li key={file.path}>
+                <code>{file.path}</code> ({file.bytes} bytes)
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </main>
+  </DndContext>
   );
 }
