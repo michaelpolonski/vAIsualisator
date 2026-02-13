@@ -12,6 +12,16 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<SupportedModelProvider, string> = {
   mock: "mock-v1",
 };
 
+const MODEL_PRESETS_BY_PROVIDER: Record<SupportedModelProvider, string[]> = {
+  openai: ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1", "o3-mini"],
+  anthropic: [
+    "claude-3-5-haiku-latest",
+    "claude-3-7-sonnet-latest",
+    "claude-3-5-sonnet-latest",
+  ],
+  mock: ["mock-v1"],
+};
+
 export const DEFAULT_MODEL_POLICY = {
   provider: "mock" as SupportedModelProvider,
   model: "mock-v1",
@@ -46,6 +56,12 @@ export function isSupportedModelProvider(
 
 export function getDefaultModelForProvider(provider: SupportedModelProvider): string {
   return DEFAULT_MODEL_BY_PROVIDER[provider];
+}
+
+export function getModelPresetsForProvider(
+  provider: SupportedModelProvider,
+): string[] {
+  return MODEL_PRESETS_BY_PROVIDER[provider];
 }
 
 export function parseModelPolicyDraft(

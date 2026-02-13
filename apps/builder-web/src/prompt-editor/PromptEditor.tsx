@@ -8,6 +8,7 @@ import { DEFAULT_OUTPUT_SCHEMA_JSON } from "../prompt-schema/output-schema.js";
 import {
   DEFAULT_MODEL_POLICY,
   getDefaultModelForProvider,
+  getModelPresetsForProvider,
 } from "../prompt-schema/model-policy.js";
 
 export function PromptEditor(): JSX.Element {
@@ -19,6 +20,9 @@ export function PromptEditor(): JSX.Element {
   const update = useBuilderStore((state) => state.updateComponent);
 
   const selected = components.find((item) => item.id === selectedId);
+  const selectedProvider = selected?.modelProvider ?? DEFAULT_MODEL_POLICY.provider;
+  const selectedModelName = selected?.modelName ?? DEFAULT_MODEL_POLICY.model;
+  const modelPresets = getModelPresetsForProvider(selectedProvider);
   const editorRef = useRef<HTMLElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const variables = getPromptVariables(selected?.type === "Button" ? selected.id : undefined);
@@ -141,7 +145,7 @@ export function PromptEditor(): JSX.Element {
             Provider
             <select
               className="field-input"
-              value={selected.modelProvider ?? DEFAULT_MODEL_POLICY.provider}
+              value={selectedProvider}
               onChange={(event) => {
                 const nextProvider = event.target.value as
                   | "openai"
@@ -166,7 +170,7 @@ export function PromptEditor(): JSX.Element {
             Model
             <input
               className="field-input"
-              value={selected.modelName ?? DEFAULT_MODEL_POLICY.model}
+              value={selectedModelName}
               onChange={(event) =>
                 update(selected.id, {
                   modelName: event.target.value,
@@ -175,6 +179,28 @@ export function PromptEditor(): JSX.Element {
               placeholder="model name"
             />
           </label>
+          <div>
+            <div className="meta">Presets</div>
+            <div className="model-presets">
+              {modelPresets.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`model-preset-chip ${
+                    selectedModelName.trim() === preset ? "active" : ""
+                  }`}
+                  onClick={() =>
+                    update(selected.id, {
+                      modelProvider: selectedProvider,
+                      modelName: preset,
+                    })
+                  }
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="meta">
             Temperature (0-2)
             <input
