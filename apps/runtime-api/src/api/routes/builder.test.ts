@@ -147,6 +147,33 @@ describe("builder compile route", () => {
     await app.close();
   });
 
+  it("exports a deployable tgz bundle", async () => {
+    const app = Fastify();
+    await registerBuilderRoutes(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/builder/bundle",
+      payload: {
+        app: defaultApp,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/gzip");
+    expect(response.headers["content-disposition"]).toContain(".tgz");
+
+    const payload = response.rawPayload
+      ? Buffer.from(response.rawPayload)
+      : Buffer.from(response.body);
+    expect(payload.byteLength).toBeGreaterThan(100);
+    // gzip magic bytes: 1f 8b
+    expect(payload[0]).toBe(0x1f);
+    expect(payload[1]).toBe(0x8b);
+
+    await app.close();
+  });
+
   it("executes preview event and returns state patch/logs", async () => {
     const app = Fastify();
     await registerBuilderRoutes(app);
