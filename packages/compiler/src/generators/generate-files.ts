@@ -51,11 +51,64 @@ CMD ["pnpm", "--filter", "@form-builder/runtime-api", "start"]
   };
 }
 
+function generateDockerCompose(plan: CompilePlan): GeneratedFile {
+  return {
+    path: `${plan.outRoot}/docker-compose.yml`,
+    content: `services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+`,
+  };
+}
+
+function generateEnvExample(plan: CompilePlan): GeneratedFile {
+  return {
+    path: `${plan.outRoot}/.env.example`,
+    content: `# Copy to .env and fill in what you need.
+PORT=3000
+
+# Optional: enable real providers (mock works without these)
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+`,
+  };
+}
+
+function generateDeployReadme(plan: CompilePlan): GeneratedFile {
+  return {
+    path: `${plan.outRoot}/DEPLOY.md`,
+    content: `# Deploy (${plan.app.appId})
+
+## Quick start (Docker)
+
+1. Copy \`.env.example\` to \`.env\` and set keys (optional)
+2. Run:
+
+\`\`\`bash
+docker compose up --build
+\`\`\`
+
+Open:
+- http://localhost:3000/ (UI)
+- http://localhost:3000/health (API health)
+`,
+  };
+}
+
 export function generateFiles(plan: CompilePlan): GeneratedFile[] {
   return [
     generateRuntimeApiAppDef(plan),
     generateEventManifest(plan),
     generateRuntimeWebSchema(plan),
     generateDockerfile(plan),
+    generateDockerCompose(plan),
+    generateEnvExample(plan),
+    generateDeployReadme(plan),
   ];
 }

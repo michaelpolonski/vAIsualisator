@@ -542,6 +542,24 @@ export async function registerBuilderRoutes(app: FastifyInstance): Promise<void>
           if (file.path.endsWith("/Dockerfile")) {
             overlaysBySuffix.set("Dockerfile", { relPath: "Dockerfile", content: file.content });
           }
+          if (file.path.endsWith("/docker-compose.yml")) {
+            overlaysBySuffix.set("docker-compose.yml", {
+              relPath: "docker-compose.yml",
+              content: file.content,
+            });
+          }
+          if (file.path.endsWith("/DEPLOY.md")) {
+            overlaysBySuffix.set("DEPLOY.md", {
+              relPath: "DEPLOY.md",
+              content: file.content,
+            });
+          }
+          if (file.path.endsWith("/.env.example")) {
+            overlaysBySuffix.set(".env.example", {
+              relPath: ".env.example",
+              content: file.content,
+            });
+          }
         }
 
         const overlayPaths = new Set<string>([...overlaysBySuffix.keys()]);
