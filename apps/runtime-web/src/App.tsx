@@ -2,7 +2,8 @@ import { useState } from "react";
 import { uiSchema } from "./generated/ui-schema.js";
 import "./styles.css";
 
-const apiBase = import.meta.env.VITE_RUNTIME_API_URL ?? "http://localhost:3000";
+// Default to same-origin so the app works out-of-the-box when served by runtime-api on one port.
+const apiBase = import.meta.env.VITE_RUNTIME_API_URL ?? "";
 
 export function App(): JSX.Element {
   const [customerComplaint, setCustomerComplaint] = useState("");
