@@ -619,6 +619,27 @@ async function compileViaApi(args: {
   return body as BuilderCompileResponse;
 }
 
+async function fetchDeployableTgzViaApi(args: {
+  app: AppDefinition;
+}): Promise<Blob> {
+  const apiBase = import.meta.env.VITE_BUILDER_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiBase}/builder/bundle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      app: args.app,
+      target: "node-fastify-react",
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Bundle export failed");
+  }
+
+  return response.blob();
+}
+
 async function compileLocally(args: {
   app: AppDefinition;
   includeFileContents?: boolean;
@@ -1965,6 +1986,22 @@ export function App(): JSX.Element {
     }
   }, [schema]);
 
+  const exportDeployableTgz = useCallback(async (): Promise<void> => {
+    setCompileSummary("Exporting deployable TGZ...");
+    try {
+      const blob = await fetchDeployableTgzViaApi({ app: schema });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${schema.appId}.tgz`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setCompileSummary("Exported deployable TGZ.");
+    } catch (error) {
+      setCompileSummary(`Export deployable TGZ failed: ${(error as Error).message}`);
+    }
+  }, [schema]);
+
   const importBundle = useCallback(
     async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
       const file = event.target.files?.[0];
@@ -2179,6 +2216,9 @@ export function App(): JSX.Element {
             <button onClick={() => void exportBundle()}>Export Bundle</button>
             <button onClick={() => void exportDeployableBundle()}>
               Export Deployable Bundle
+            </button>
+            <button onClick={() => void exportDeployableTgz()}>
+              Export TGZ
             </button>
             <button
               onClick={() => {
