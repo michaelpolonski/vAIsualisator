@@ -9,6 +9,7 @@ import {
   type AppDefinition,
 } from "@form-builder/contracts";
 import { executeEvent } from "../../application/execute-event.js";
+import { createTarGz } from "../../application/tar.js";
 import {
   createProviderRegistry,
   getProviderStatusSnapshot,
@@ -24,6 +25,11 @@ const CompileBuilderRequestSchema = z.object({
 const PreviewExecuteRequestSchema = z.object({
   app: z.unknown(),
   state: z.record(z.string(), z.unknown()),
+});
+
+const BundleArtifactRequestSchema = z.object({
+  app: z.unknown(),
+  target: z.literal("node-fastify-react").optional(),
 });
 
 const ProjectUpsertRequestSchema = z.object({
@@ -161,7 +167,7 @@ async function collectTextFiles(args: {
         continue;
       }
 
-      const relPath = relative(args.baseDir, full).replaceAll("\\", "/");
+      const relPath = relative(args.baseDir, full).replaceAll("\\\\", "/");
       const content = await readFile(full, "utf8");
       results.push({ relPath, content });
     }
@@ -192,6 +198,93 @@ function createBundleRootPackageJson(appId: string): string {
 
 function createWorkspaceYaml(): string {
   return ["packages:", "  - \"apps/*\"", "  - \"packages/*\"", ""].join("\n");
+}
+
+interface CompileFileContent {
+  path: string;
+  content: string;
+}
+
+async function buildDeployableBundleFiles(args: {
+  app: AppDefinition;
+  generatedFiles: Array<{ path: string; content: string }>;
+}): Promise<CompileFileContent[]> {
+  const repoRoot = await findRepoRoot(process.cwd());
+  const bundleRoot = `bundle/${args.app.appId}`;
+
+  const scaffold = (
+    await Promise.all([
+      collectTextFiles({
+        baseDir: repoRoot,
+        include: "apps/runtime-api",
+        excludeDirs: ["node_modules", "dist"],
+      }),
+      collectTextFiles({
+        baseDir: repoRoot,
+        include: "apps/runtime-web",
+        excludeDirs: ["node_modules", "dist"],
+      }),
+      collectTextFiles({
+        baseDir: repoRoot,
+        include: "packages/contracts",
+        excludeDirs: ["node_modules", "dist"],
+      }),
+      collectTextFiles({
+        baseDir: repoRoot,
+        include: "packages/compiler",
+        excludeDirs: ["node_modules", "dist"],
+      }),
+    ])
+  ).flat();
+
+  const rootTsconfig = await readFile(join(repoRoot, "tsconfig.base.json"), "utf8");
+  const rootLock = await readFile(join(repoRoot, "pnpm-lock.yaml"), "utf8").catch(() => "");
+  const rootFiles: Array<{ relPath: string; content: string }> = [
+    { relPath: "package.json", content: createBundleRootPackageJson(args.app.appId) },
+    { relPath: "pnpm-workspace.yaml", content: createWorkspaceYaml() },
+    { relPath: "tsconfig.base.json", content: rootTsconfig },
+    ...(rootLock.length > 0 ? [{ relPath: "pnpm-lock.yaml", content: rootLock }] : []),
+  ];
+
+  const overlaysByPath = new Map<string, { relPath: string; content: string }>();
+  for (const file of args.generatedFiles) {
+    const suffixes: Array<{ suffix: string; relPath: string }> = [
+      {
+        suffix: "/runtime-api/src/generated/app-definition.ts",
+        relPath: "apps/runtime-api/src/generated/app-definition.ts",
+      },
+      {
+        suffix: "/runtime-api/src/generated/event-manifest.ts",
+        relPath: "apps/runtime-api/src/generated/event-manifest.ts",
+      },
+      {
+        suffix: "/runtime-web/src/generated/ui-schema.ts",
+        relPath: "apps/runtime-web/src/generated/ui-schema.ts",
+      },
+      { suffix: "/Dockerfile", relPath: "Dockerfile" },
+      { suffix: "/docker-compose.yml", relPath: "docker-compose.yml" },
+      { suffix: "/DEPLOY.md", relPath: "DEPLOY.md" },
+      { suffix: "/.env.example", relPath: ".env.example" },
+    ];
+
+    for (const item of suffixes) {
+      if (file.path.endsWith(item.suffix)) {
+        overlaysByPath.set(item.relPath, { relPath: item.relPath, content: file.content });
+      }
+    }
+  }
+
+  const overlayPaths = new Set<string>([...overlaysByPath.keys()]);
+  const fileContents = [
+    ...rootFiles,
+    ...scaffold.filter((item) => !overlayPaths.has(item.relPath)),
+    ...[...overlaysByPath.values()],
+  ].map((file) => ({
+    path: `${bundleRoot}/${file.relPath}`,
+    content: file.content,
+  }));
+
+  return fileContents;
 }
 
 function parseModelCatalogEnv(value: string | undefined): string[] {
@@ -450,6 +543,60 @@ export async function registerBuilderRoutes(app: FastifyInstance): Promise<void>
     }
   });
 
+  app.post("/builder/bundle", async (request, reply) => {
+    const payload = BundleArtifactRequestSchema.safeParse(request.body);
+    if (!payload.success) {
+      return reply.status(400).send({
+        error: "INVALID_REQUEST",
+        details: payload.error.issues,
+      });
+    }
+
+    const parsed = AppDefinitionSchema.safeParse(payload.data.app);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "INVALID_APP_DEFINITION",
+        details: parsed.error.issues,
+      });
+    }
+
+    try {
+      const compiler = new AppCompiler();
+      const result = await compiler.compile({
+        app: parsed.data,
+        target: payload.data.target ?? "node-fastify-react",
+      });
+
+      if (result.diagnostics.some((item) => item.severity === "error")) {
+        return reply.status(400).send({
+          error: "COMPILE_FAILED",
+          diagnostics: result.diagnostics,
+        });
+      }
+
+      const fileContents = await buildDeployableBundleFiles({
+        app: parsed.data,
+        generatedFiles: result.files,
+      });
+
+      const tgz = createTarGz(
+        fileContents.map((file) => ({ path: file.path, content: file.content })),
+      );
+
+      reply.header("content-type", "application/gzip");
+      reply.header(
+        "content-disposition",
+        `attachment; filename="${parsed.data.appId}.tgz"`,
+      );
+      return reply.send(tgz);
+    } catch (error) {
+      return reply.status(500).send({
+        error: "BUNDLE_FAILED",
+        message: (error as Error).message,
+      });
+    }
+  });
+
   app.post("/builder/compile", async (request, reply) => {
     const payload = CompileBuilderRequestSchema.safeParse(request.body);
     if (!payload.success) {
@@ -484,93 +631,10 @@ export async function registerBuilderRoutes(app: FastifyInstance): Promise<void>
           });
         }
 
-        const repoRoot = await findRepoRoot(process.cwd());
-        const bundleRoot = `bundle/${parsedApp.data.appId}`;
-
-        const scaffold = (
-          await Promise.all([
-            collectTextFiles({
-              baseDir: repoRoot,
-              include: "apps/runtime-api",
-              excludeDirs: ["node_modules", "dist"],
-            }),
-            collectTextFiles({
-              baseDir: repoRoot,
-              include: "apps/runtime-web",
-              excludeDirs: ["node_modules", "dist"],
-            }),
-            collectTextFiles({
-              baseDir: repoRoot,
-              include: "packages/contracts",
-              excludeDirs: ["node_modules", "dist"],
-            }),
-            collectTextFiles({
-              baseDir: repoRoot,
-              include: "packages/compiler",
-              excludeDirs: ["node_modules", "dist"],
-            }),
-          ])
-        ).flat();
-
-        const rootTsconfig = await readFile(join(repoRoot, "tsconfig.base.json"), "utf8");
-        const rootFiles: Array<{ relPath: string; content: string }> = [
-          { relPath: "package.json", content: createBundleRootPackageJson(parsedApp.data.appId) },
-          { relPath: "pnpm-workspace.yaml", content: createWorkspaceYaml() },
-          { relPath: "tsconfig.base.json", content: rootTsconfig },
-        ];
-
-        const overlaysBySuffix = new Map<string, { relPath: string; content: string }>();
-        for (const file of result.files) {
-          if (file.path.endsWith("/runtime-api/src/generated/app-definition.ts")) {
-            overlaysBySuffix.set("apps/runtime-api/src/generated/app-definition.ts", {
-              relPath: "apps/runtime-api/src/generated/app-definition.ts",
-              content: file.content,
-            });
-          }
-          if (file.path.endsWith("/runtime-api/src/generated/event-manifest.ts")) {
-            overlaysBySuffix.set("apps/runtime-api/src/generated/event-manifest.ts", {
-              relPath: "apps/runtime-api/src/generated/event-manifest.ts",
-              content: file.content,
-            });
-          }
-          if (file.path.endsWith("/runtime-web/src/generated/ui-schema.ts")) {
-            overlaysBySuffix.set("apps/runtime-web/src/generated/ui-schema.ts", {
-              relPath: "apps/runtime-web/src/generated/ui-schema.ts",
-              content: file.content,
-            });
-          }
-          if (file.path.endsWith("/Dockerfile")) {
-            overlaysBySuffix.set("Dockerfile", { relPath: "Dockerfile", content: file.content });
-          }
-          if (file.path.endsWith("/docker-compose.yml")) {
-            overlaysBySuffix.set("docker-compose.yml", {
-              relPath: "docker-compose.yml",
-              content: file.content,
-            });
-          }
-          if (file.path.endsWith("/DEPLOY.md")) {
-            overlaysBySuffix.set("DEPLOY.md", {
-              relPath: "DEPLOY.md",
-              content: file.content,
-            });
-          }
-          if (file.path.endsWith("/.env.example")) {
-            overlaysBySuffix.set(".env.example", {
-              relPath: ".env.example",
-              content: file.content,
-            });
-          }
-        }
-
-        const overlayPaths = new Set<string>([...overlaysBySuffix.keys()]);
-        const fileContents = [
-          ...rootFiles,
-          ...scaffold.filter((item) => !overlayPaths.has(item.relPath)),
-          ...[...overlaysBySuffix.values()],
-        ].map((file) => ({
-          path: `${bundleRoot}/${file.relPath}`,
-          content: file.content,
-        }));
+        const fileContents = await buildDeployableBundleFiles({
+          app: parsedApp.data,
+          generatedFiles: result.files,
+        });
 
         return reply.send({
           diagnostics: result.diagnostics,

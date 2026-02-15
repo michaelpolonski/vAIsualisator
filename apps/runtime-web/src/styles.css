@@ -16,19 +16,147 @@ body {
   gap: 12px;
 }
 
-textarea {
+.runtime-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.runtime-title {
+  margin: 0;
+  font-size: 28px;
+}
+
+.runtime-meta {
+  margin: 6px 0 0 0;
+  color: #334155;
+  font-size: 12px;
+}
+
+.runtime-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.runtime-status-label {
+  color: #475569;
+}
+
+.runtime-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.runtime-field {
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.runtime-textarea {
   width: 100%;
   min-height: 140px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 14px;
 }
 
-table {
+.runtime-button-wrap {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.runtime-button {
+  border: 1px solid #0284c7;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.runtime-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.runtime-hint {
+  font-size: 12px;
+  color: #475569;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runtime-table-wrap {
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 12px;
+  overflow: auto;
+}
+
+.runtime-table-title {
+  font-weight: 800;
+  margin-bottom: 10px;
+  color: #0f172a;
+}
+
+.runtime-empty {
+  font-size: 12px;
+  color: #475569;
+}
+
+.runtime-table {
   border-collapse: collapse;
   width: 100%;
+  font-size: 13px;
 }
 
-th,
-td {
+.runtime-table th,
+.runtime-table td {
   border: 1px solid #cbd5e1;
   padding: 8px;
   text-align: left;
+}
+
+.runtime-logs {
+  margin-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.55);
+  padding-top: 10px;
+}
+
+.runtime-logs h2 {
+  font-size: 14px;
+  margin: 0 0 8px 0;
+}
+
+.runtime-log-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.runtime-log-item code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  color: #0f172a;
 }
